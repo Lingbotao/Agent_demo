@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Routes, Route, useNavigate, useParams, useLocation } from 'react-router-dom';
+import { Routes, Route, useNavigate, useParams, useLocation, Navigate } from 'react-router-dom';
 import '@tdesign-react/chat/es/style/index.js';
 
 import { useAgents } from './hooks/useAgents';
@@ -7,6 +7,7 @@ import { useTheme } from './hooks/useTheme';
 import { useSessions } from './hooks/useSessions';
 import { useModels } from './hooks/useModels';
 import { useChat } from './hooks/useChat';
+import { AuthProvider, useAuth } from './hooks/useAuth';
 import { PermissionMode } from './types';
 
 import { Sidebar } from './components/Sidebar';
@@ -14,16 +15,42 @@ import { Header } from './components/Header';
 import { SettingsPage } from './components/SettingsPage';
 import { ChatPage } from './pages/ChatPage';
 import AdminPage from './pages/AdminPage';
+import LoginPage from './pages/LoginPage';
 
 function App() {
   return (
-    <Routes>
-      <Route path="/" element={<AppContent />} />
-      <Route path="/chat/:sessionId" element={<AppContent />} />
-      <Route path="/settings" element={<AppContent />} />
-      <Route path="/admin" element={<AppContent />} />
-    </Routes>
+    <AuthProvider>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/" element={<RequireAuth><AppContent /></RequireAuth>} />
+        <Route path="/chat/:sessionId" element={<RequireAuth><AppContent /></RequireAuth>} />
+        <Route path="/settings" element={<RequireAuth><AppContent /></RequireAuth>} />
+        <Route path="/admin" element={<RequireAuth><RequireAdmin><AppContent /></RequireAdmin></RequireAuth>} />
+      </Routes>
+    </AuthProvider>
   );
+}
+
+/** 未登录跳转到 /login，登录后回到原页面 */
+function RequireAuth({ children }: { children: JSX.Element }) {
+  const { user, loading } = useAuth();
+  const location = useLocation();
+  if (loading) {
+    return <div className="h-screen w-screen flex items-center justify-center" style={{ color: 'var(--td-text-color-secondary)' }}>加载中...</div>;
+  }
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
+  return children;
+}
+
+/** 已登录但非管理员，跳到 / */
+function RequireAdmin({ children }: { children: JSX.Element }) {
+  const { user } = useAuth();
+  if (user && user.role !== 'admin') {
+    return <Navigate to="/" replace />;
+  }
+  return children;
 }
 
 function AppContent() {

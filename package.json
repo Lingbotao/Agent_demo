@@ -14,10 +14,14 @@
     "@tdesign-react/aigc": "^0.1.0-alpha.1",
     "@tdesign-react/chat": "^1.0.2",
     "@tencent-ai/agent-sdk": "^0.3.43",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.6.2",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
     "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.563.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -33,7 +37,7 @@
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@types/uuid": "^9.0.7",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.20",
     "concurrently": "^8.2.2",
     "less": "^4.3.0",
@@ -41,6 +45,6 @@
     "tailwindcss": "^3.4.17",
     "tsx": "^4.6.2",
     "typescript": "^5.3.2",
-    "vite": "^5.0.10"
+    "vite": "^7.1.5"
   }
 }

@@ -102,6 +102,18 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_tickets_session ON tickets(session_id);
   CREATE INDEX IF NOT EXISTS idx_satisfaction_session ON satisfaction_ratings(session_id);
   CREATE INDEX IF NOT EXISTS idx_intents_session ON conversation_intents(session_id);
+
+  -- 用户表（自建登录）
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'agent', 'visitor')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 `);
 
 // 数据库迁移：添加 sdk_session_id 列（如果不存在）
@@ -464,3 +476,44 @@ export function getIntentStats(): IntentStats {
 }
 
 export default db;
+
+// ============= 用户表（自建登录） =============
+
+export type UserRole = 'admin' | 'agent' | 'visitor';
+
+export interface User {
+  id: string;
+  username: string;
+  password_hash: string;
+  role: UserRole;
+  created_at: string;
+  updated_at: string;
+}
+
+export function getUserByUsername(username: string): User | undefined {
+  return db.prepare('SELECT * FROM users WHERE username = ?').get(username) as User | undefined;
+}
+
+export function getUserById(id: string): User | undefined {
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(id) as User | undefined;
+}
+
+export function createUser(user: Omit<User, 'id' | 'created_at' | 'updated_at'> & { id?: string }): User {
+  const now = new Date().toISOString();
+  const record: User = {
+    id: user.id || crypto.randomUUID(),
+    username: user.username,
+    password_hash: user.password_hash,
+    role: user.role,
+    created_at: now,
+    updated_at: now,
+  };
+  db.prepare(
+    'INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(record.id, record.username, record.password_hash, record.role, record.created_at, record.updated_at);
+  return record;
+}
+
+export function getUserCount(): number {
+  return (db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number }).count;
+}

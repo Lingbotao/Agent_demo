@@ -1,5 +1,5 @@
 import express from "express";
-import { query, unstable_v2_createSession, unstable_v2_authenticate, PermissionResult, CanUseTool } from "@tencent-ai/agent-sdk";
+import { query, unstable_v2_createSession, PermissionResult, CanUseTool } from "@tencent-ai/agent-sdk";
 import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -9,6 +9,16 @@ import * as db from "./db.js";
 import { getWorkflow } from "./agents/graph.js";
 import { initializeFaqKnowledge } from "./rag/faqLoader.js";
 import adminRoutes from "./admin/routes.js";
+import {
+  attachUser,
+  requireAuth,
+  requireRole,
+  hashPassword,
+  verifyPassword,
+  signToken,
+  bootstrapDefaultAdmin,
+  type AuthedRequest,
+} from "./auth.js";
 
 const execAsync = promisify(exec);
 
@@ -35,6 +45,7 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.json());
+app.use(attachUser);
 
 // 缓存可用模型列表
 let cachedModels: Array<{ modelId: string; name: string; description?: string }> = [];
@@ -54,143 +65,68 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// 登录方式类型
-type LoginMethod = 'env' | 'cli' | 'none';
+// ============= 自建鉴权 =============
 
-interface LoginStatusResponse {
-  isLoggedIn: boolean;
-  method?: LoginMethod;
-  envConfigured?: boolean;
-  cliConfigured?: boolean;
-  error?: string;
-  apiKey?: string; // 脱敏后的 API Key
-  envVars?: {
-    apiKey?: string;
-    authToken?: string;
-    internetEnv?: string;
-    baseUrl?: string;
-  };
+interface RegisterBody {
+  username?: string;
+  password?: string;
+  role?: 'admin' | 'agent' | 'visitor';
 }
 
-// 检查 CodeBuddy CLI 登录状态
-app.get("/api/check-login", async (req, res) => {
-  const response: LoginStatusResponse = {
-    isLoggedIn: false,
-    envConfigured: false,
-    cliConfigured: false,
-    envVars: {},
-  };
-  
-  // 1. 检查环境变量
-  const apiKey = process.env.CODEBUDDY_API_KEY;
-  const authToken = process.env.CODEBUDDY_AUTH_TOKEN;
-  const internetEnv = process.env.CODEBUDDY_INTERNET_ENVIRONMENT;
-  const baseUrl = process.env.CODEBUDDY_BASE_URL;
-  
-  if (apiKey || authToken) {
-    response.envConfigured = true;
-    // 脱敏显示
-    if (apiKey) {
-      response.envVars!.apiKey = apiKey.slice(0, 8) + '****' + apiKey.slice(-4);
-      response.apiKey = response.envVars!.apiKey;
-    }
-    if (authToken) {
-      response.envVars!.authToken = authToken.slice(0, 8) + '****' + authToken.slice(-4);
-    }
-    if (internetEnv) {
-      response.envVars!.internetEnv = internetEnv;
-    }
-    if (baseUrl) {
-      response.envVars!.baseUrl = baseUrl;
-    }
+interface LoginBody {
+  username?: string;
+  password?: string;
+}
+
+// POST /api/auth/register —— 注册（仅 admin 可调用，用于创建客服/访客账号）
+app.post("/api/auth/register", requireAuth, requireRole('admin'), async (req: AuthedRequest, res) => {
+  const { username, password, role } = (req.body || {}) as RegisterBody;
+  if (!username || !password) {
+    return res.status(400).json({ error: '用户名和密码不能为空' });
   }
-  
-  // 2. 使用 unstable_v2_authenticate 检查登录状态（更可靠）
-  try {
-    let needsLogin = false;
-    
-    const result = await unstable_v2_authenticate({
-      environment: 'external',
-      onAuthUrl: async (authState) => {
-        // 如果执行到这个回调，说明未登录
-        needsLogin = true;
-        console.log('[Check Login] 需要登录，认证 URL:', authState.authUrl);
-        // 将认证 URL 返回给前端（如果需要）
-        response.error = '未登录，请先登录 CodeBuddy CLI';
-      }
-    });
-    
-    // 如果没有触发 onAuthUrl 回调，说明已登录
-    if (!needsLogin && result?.userinfo) {
-      response.isLoggedIn = true;
-      response.cliConfigured = true;
-      
-      // 判断登录方式
-      if (response.envConfigured) {
-        response.method = 'env';
-      } else {
-        response.method = 'cli';
-      }
-      
-      console.log('[Check Login] 已登录用户:', result.userinfo.userName);
-    } else if (!needsLogin) {
-      // result 存在但没有 userinfo，仍然认为已登录
-      response.isLoggedIn = true;
-      response.cliConfigured = true;
-      response.method = response.envConfigured ? 'env' : 'cli';
-    }
-  } catch (error: any) {
-    console.error("[Check Login] SDK Error:", error);
-    
-    // 如果有环境变量配置，仍然认为是登录状态
-    if (response.envConfigured) {
-      response.isLoggedIn = true;
-      response.method = 'env';
-    } else {
-      response.error = error?.message || String(error);
-      response.method = 'none';
-    }
+  if (username.length < 3 || password.length < 6) {
+    return res.status(400).json({ error: '用户名至少 3 位、密码至少 6 位' });
   }
-  
-  res.json(response);
+  const safeRole: 'admin' | 'agent' | 'visitor' =
+    role === 'admin' || role === 'agent' || role === 'visitor' ? role : 'visitor';
+
+  if (db.getUserByUsername(username)) {
+    return res.status(409).json({ error: '用户名已存在' });
+  }
+  const password_hash = await hashPassword(password);
+  const user = db.createUser({ username, password_hash, role: safeRole });
+  res.json({
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    created_at: user.created_at,
+  });
 });
 
-// 保存环境变量配置
-app.post("/api/save-env-config", (req, res) => {
-  const { apiKey, authToken, internetEnv, baseUrl } = req.body;
-  
-  if (!apiKey && !authToken) {
-    return res.status(400).json({ error: '请至少配置 API Key 或 Auth Token' });
+// POST /api/auth/login —— 登录，签发 JWT
+app.post("/api/auth/login", async (req, res) => {
+  const { username, password } = (req.body || {}) as LoginBody;
+  if (!username || !password) {
+    return res.status(400).json({ error: '用户名和密码不能为空' });
   }
-  
-  const configuredVars: string[] = [];
-  
-  // 设置环境变量（仅在当前进程有效）
-  if (apiKey) {
-    process.env.CODEBUDDY_API_KEY = apiKey;
-    configuredVars.push('CODEBUDDY_API_KEY');
+  const user = db.getUserByUsername(username);
+  if (!user) {
+    return res.status(401).json({ error: '用户名或密码错误' });
   }
-  if (authToken) {
-    process.env.CODEBUDDY_AUTH_TOKEN = authToken;
-    configuredVars.push('CODEBUDDY_AUTH_TOKEN');
+  const ok = await verifyPassword(password, user.password_hash);
+  if (!ok) {
+    return res.status(401).json({ error: '用户名或密码错误' });
   }
-  if (internetEnv) {
-    process.env.CODEBUDDY_INTERNET_ENVIRONMENT = internetEnv;
-    configuredVars.push('CODEBUDDY_INTERNET_ENVIRONMENT');
-  }
-  if (baseUrl) {
-    process.env.CODEBUDDY_BASE_URL = baseUrl;
-    configuredVars.push('CODEBUDDY_BASE_URL');
-  }
-  
-  // 清除模型缓存，以便重新获取
-  cachedModels = [];
-  
-  res.json({ 
-    success: true, 
-    message: `已设置: ${configuredVars.join(', ')}`,
-    note: '环境变量仅在当前服务器进程有效，重启后需要重新设置'
+  const token = signToken(user);
+  res.json({
+    token,
+    user: { id: user.id, username: user.username, role: user.role },
   });
+});
+
+// GET /api/auth/me —— 当前登录用户
+app.get("/api/auth/me", requireAuth, (req: AuthedRequest, res) => {
+  res.json({ user: req.user });
 });
 
 // 获取可用模型列表
@@ -343,7 +279,7 @@ app.delete("/api/sessions/:sessionId", (req, res) => {
 // ============= 聊天 API =============
 
 // 权限响应 API
-app.post("/api/permission-response", (req, res) => {
+app.post("/api/permission-response", requireAuth, (req, res) => {
   const { requestId, behavior, message } = req.body;
   
   console.log(`[Permission] Response received: requestId=${requestId}, behavior=${behavior}`);
@@ -373,7 +309,7 @@ app.post("/api/permission-response", (req, res) => {
 });
 
 // 发送消息并获取流式响应
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", requireAuth, async (req, res) => {
   const { sessionId, message, model, systemPrompt, cwd, permissionMode } = req.body;
   
   // 请求日志
@@ -703,7 +639,7 @@ app.get("/api/satisfaction/stats", (req, res) => {
 // ============= 智能客服 Agent API =============
 
 // 智能客服对话（使用 LangGraph 工作流）
-app.post("/api/cs-agent/chat", async (req, res) => {
+app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
   const { sessionId, message } = req.body;
 
   console.log(`\n[CS-Agent] ===== 智能客服请求 =====`);
@@ -831,11 +767,14 @@ app.post("/api/cs-agent/chat", async (req, res) => {
 
 // ============= 管理后台路由 =============
 
-app.use("/api/admin", adminRoutes);
+app.use("/api/admin", requireAuth, requireRole('admin'), adminRoutes);
 
 // 启动服务器
-app.listen(PORT, () => {
-  console.log(`
+bootstrapDefaultAdmin()
+  .catch((err) => console.error('[Auth] 引导管理员失败:', err))
+  .finally(() => {
+    app.listen(PORT, () => {
+      console.log(`
 ╔════════════════════════════════════════════╗
 ║                                            ║
 ║     ◉ API 服务器已启动                      ║
@@ -846,17 +785,18 @@ app.listen(PORT, () => {
 ║     管理后台: /api/admin/dashboard           ║
 ║                                            ║
 ╚════════════════════════════════════════════╝
-  `);
+      `);
 
-  // 初始化 FAQ 知识库
-  try {
-    const faqResult = initializeFaqKnowledge();
-    if (faqResult.loaded > 0) {
-      console.log(`[Init] FAQ 知识库已初始化: ${faqResult.loaded} 条`);
-    } else {
-      console.log(`[Init] FAQ 知识库已有 ${faqResult.total} 条数据`);
-    }
-  } catch (error: any) {
-    console.error('[Init] FAQ 初始化失败:', error.message);
-  }
-});
+      // 初始化 FAQ 知识库
+      try {
+        const faqResult = initializeFaqKnowledge();
+        if (faqResult.loaded > 0) {
+          console.log(`[Init] FAQ 知识库已初始化: ${faqResult.loaded} 条`);
+        } else {
+          console.log(`[Init] FAQ 知识库已有 ${faqResult.total} 条数据`);
+        }
+      } catch (error: any) {
+        console.error('[Init] FAQ 初始化失败:', error.message);
+      }
+    });
+  });

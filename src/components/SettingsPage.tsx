@@ -1,52 +1,30 @@
-import { useState, useEffect, useCallback } from 'react';
-import { 
-  Form, 
-  Input, 
-  Textarea, 
-  Button, 
+import { useState } from 'react';
+import {
+  Form,
+  Input,
+  Textarea,
+  Button,
   Tooltip,
   Popconfirm,
   MessagePlugin,
-  Loading,
-  Link,
   Tag,
   Select
 } from 'tdesign-react';
-import { 
-  AddIcon, 
-  EditIcon, 
+import {
+  AddIcon,
+  EditIcon,
   DeleteIcon,
   CheckIcon,
-  CheckCircleFilledIcon,
-  CloseCircleFilledIcon,
-  RefreshIcon
 } from 'tdesign-icons-react';
-import { Bot, Sparkles, Code, FileText, Globe, Lightbulb } from 'lucide-react';
+import { Bot, Sparkles, Code, FileText, Globe, Lightbulb, LogOutIcon } from 'lucide-react';
 import { CustomAgent, PermissionMode } from '../types';
+import { useAuth } from '../hooks/useAuth';
 
 interface SettingsPageProps {
   agents: CustomAgent[];
   onAdd: (agent: Omit<CustomAgent, 'id' | 'createdAt' | 'updatedAt'>) => CustomAgent;
   onUpdate: (id: string, updates: Partial<Omit<CustomAgent, 'id' | 'createdAt'>>) => void;
   onDelete: (id: string) => void;
-}
-
-type LoginMethod = 'env' | 'cli' | 'none';
-
-interface LoginStatus {
-  isLoggedIn: boolean;
-  checking: boolean;
-  method?: LoginMethod;
-  envConfigured?: boolean;
-  cliConfigured?: boolean;
-  error?: string;
-  apiKey?: string;
-  envVars?: {
-    apiKey?: string;
-    authToken?: string;
-    internetEnv?: string;
-    baseUrl?: string;
-  };
 }
 
 const PRESET_ICONS = [
@@ -101,12 +79,16 @@ const PRESET_TEMPLATES = [
   },
 ];
 
-export function SettingsPage({ 
-  agents, 
-  onAdd, 
-  onUpdate, 
-  onDelete 
+export function SettingsPage({
+  agents,
+  onAdd,
+  onUpdate,
+  onDelete
 }: SettingsPageProps) {
+  const { user, logout } = useAuth();
+  const navigate = (window as any).navigate || (() => {}); // 兼容旧调用，不影响
+  void navigate;
+
   const [editingAgent, setEditingAgent] = useState<CustomAgent | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [formData, setFormData] = useState({
@@ -117,94 +99,6 @@ export function SettingsPage({
     color: '#0052d9',
     permissionMode: 'default' as PermissionMode,
   });
-  
-  // 登录状态
-  const [loginStatus, setLoginStatus] = useState<LoginStatus>({
-    isLoggedIn: false,
-    checking: true,
-  });
-  
-  // 环境变量配置
-  const [showEnvConfig, setShowEnvConfig] = useState(false);
-  const [envConfig, setEnvConfig] = useState({
-    apiKey: '',
-    authToken: '',
-    internetEnv: '' as '' | 'internal' | 'iOA',
-    baseUrl: '',
-  });
-  const [savingEnv, setSavingEnv] = useState(false);
-
-  // 检查登录状态
-  const checkLoginStatus = useCallback(async () => {
-    setLoginStatus(prev => ({ ...prev, checking: true, error: undefined }));
-    
-    try {
-      const response = await fetch('/api/check-login');
-      const data = await response.json();
-      
-      setLoginStatus({
-        isLoggedIn: data.isLoggedIn,
-        checking: false,
-        method: data.method,
-        envConfigured: data.envConfigured,
-        cliConfigured: data.cliConfigured,
-        error: data.error,
-        apiKey: data.apiKey,
-        envVars: data.envVars,
-      });
-    } catch (error: any) {
-      setLoginStatus({
-        isLoggedIn: false,
-        checking: false,
-        error: error?.message || '检查登录状态失败',
-      });
-    }
-  }, []);
-  
-  // 保存环境变量配置
-  const saveEnvConfig = async () => {
-    // 至少需要配置一个有效的值
-    const hasAnyConfig = envConfig.apiKey.trim() || envConfig.authToken.trim();
-    if (!hasAnyConfig) {
-      MessagePlugin.warning('请至少配置 API Key 或 Auth Token');
-      return;
-    }
-    
-    setSavingEnv(true);
-    try {
-      const response = await fetch('/api/save-env-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apiKey: envConfig.apiKey.trim() || undefined,
-          authToken: envConfig.authToken.trim() || undefined,
-          internetEnv: envConfig.internetEnv || undefined,
-          baseUrl: envConfig.baseUrl.trim() || undefined,
-        }),
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        MessagePlugin.success(data.message);
-        setShowEnvConfig(false);
-        setEnvConfig({ apiKey: '', authToken: '', internetEnv: '', baseUrl: '' });
-        // 重新检查登录状态
-        checkLoginStatus();
-      } else {
-        MessagePlugin.error(data.error || '保存失败');
-      }
-    } catch (error: any) {
-      MessagePlugin.error(error?.message || '保存失败');
-    } finally {
-      setSavingEnv(false);
-    }
-  };
-
-  // 初始化时检查登录状态
-  useEffect(() => {
-    checkLoginStatus();
-  }, [checkLoginStatus]);
 
   const resetForm = () => {
     setFormData({
@@ -253,6 +147,7 @@ export function SettingsPage({
     setFormData({
       ...template,
       description: template.description,
+      permissionMode: 'default' as PermissionMode,
     });
     setIsCreating(true);
   };
@@ -285,225 +180,65 @@ export function SettingsPage({
           </p>
         </div>
 
-        {/* 登录配置 */}
+        {/* 账号信息 */}
         <div>
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 
+              <h2
                 className="text-lg font-medium"
                 style={{ color: 'var(--td-text-color-primary)' }}
               >
-                登录配置
+                账号信息
               </h2>
-              <p 
+              <p
                 className="text-sm mt-1"
                 style={{ color: 'var(--td-text-color-secondary)' }}
               >
-                支持环境变量或 CodeBuddy CLI 登录
+                当前登录的账号与角色
               </p>
             </div>
-            <Button 
-              variant="text" 
-              icon={<RefreshIcon />}
-              onClick={checkLoginStatus}
-              loading={loginStatus.checking}
+            <Button
+              variant="text"
+              icon={<LogOutIcon size={16} />}
+              onClick={() => {
+                logout();
+                MessagePlugin.success('已退出登录');
+              }}
             >
-              刷新
+              退出登录
             </Button>
           </div>
-          
-          {/* 当前状态 */}
-          <div className="flex items-center gap-3 mb-6">
-            {loginStatus.checking ? (
-              <>
-                <Loading size="small" />
-                <span style={{ color: 'var(--td-text-color-secondary)' }}>
-                  正在检查登录状态...
-                </span>
-              </>
-            ) : loginStatus.isLoggedIn ? (
-              <>
-                <CheckCircleFilledIcon 
-                  size="20px" 
-                  style={{ color: 'var(--td-success-color)' }} 
-                />
-                <span style={{ color: 'var(--td-text-color-primary)' }}>
-                  已登录
-                </span>
-                <Tag size="small" variant="outline">
-                  {loginStatus.method === 'env' ? '环境变量' : 'CLI'}
-                </Tag>
-                {loginStatus.method === 'env' && loginStatus.apiKey && (
-                  <span 
-                    className="text-sm font-mono"
-                    style={{ color: 'var(--td-text-color-secondary)' }}
-                  >
-                    {loginStatus.apiKey}
-                  </span>
-                )}
-              </>
-            ) : (
-              <>
-                <CloseCircleFilledIcon 
-                  size="20px" 
-                  style={{ color: 'var(--td-text-color-placeholder)' }} 
-                />
-                <span style={{ color: 'var(--td-text-color-secondary)' }}>
-                  未登录
-                </span>
-              </>
-            )}
-          </div>
-          
-          {/* 环境变量配置 */}
-          <div className="mb-6">
-            <h3 
-              className="text-sm font-medium mb-3"
-              style={{ color: 'var(--td-text-color-secondary)' }}
+
+          {user && (
+            <div
+              className="p-4 rounded-xl flex items-center gap-3"
+              style={{
+                backgroundColor: 'var(--td-bg-color-component)',
+              }}
             >
-              方式一：环境变量
-            </h3>
-            
-            {showEnvConfig ? (
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label 
-                      className="text-xs block mb-1"
-                      style={{ color: 'var(--td-text-color-placeholder)' }}
-                    >
-                      CODEBUDDY_API_KEY
-                    </label>
-                    <Input
-                      type="password"
-                      size="small"
-                      value={envConfig.apiKey}
-                      onChange={(v) => setEnvConfig(prev => ({ ...prev, apiKey: v as string }))}
-                      placeholder="API 密钥（推荐）"
-                    />
-                  </div>
-                  <div>
-                    <label 
-                      className="text-xs block mb-1"
-                      style={{ color: 'var(--td-text-color-placeholder)' }}
-                    >
-                      CODEBUDDY_AUTH_TOKEN
-                    </label>
-                    <Input
-                      type="password"
-                      size="small"
-                      value={envConfig.authToken}
-                      onChange={(v) => setEnvConfig(prev => ({ ...prev, authToken: v as string }))}
-                      placeholder="认证令牌"
-                    />
-                  </div>
-                  <div>
-                    <label 
-                      className="text-xs block mb-1"
-                      style={{ color: 'var(--td-text-color-placeholder)' }}
-                    >
-                      CODEBUDDY_INTERNET_ENVIRONMENT
-                    </label>
-                    <Select
-                      size="small"
-                      value={envConfig.internetEnv}
-                      onChange={(v) => setEnvConfig(prev => ({ ...prev, internetEnv: v as any }))}
-                      placeholder="网络环境（可选）"
-                      clearable
-                      options={[
-                        { label: 'internal', value: 'internal' },
-                        { label: 'iOA', value: 'iOA' },
-                      ]}
-                    />
-                  </div>
-                  <div>
-                    <label 
-                      className="text-xs block mb-1"
-                      style={{ color: 'var(--td-text-color-placeholder)' }}
-                    >
-                      CODEBUDDY_BASE_URL
-                    </label>
-                    <Input
-                      size="small"
-                      value={envConfig.baseUrl}
-                      onChange={(v) => setEnvConfig(prev => ({ ...prev, baseUrl: v as string }))}
-                      placeholder="自定义 URL（可选）"
-                    />
-                  </div>
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center text-white font-medium"
+                style={{ backgroundColor: '#0052d9' }}
+              >
+                {user.username.slice(0, 1).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div
+                  className="font-medium truncate"
+                  style={{ color: 'var(--td-text-color-primary)' }}
+                >
+                  {user.username}
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button 
-                    size="small"
-                    theme="primary" 
-                    onClick={saveEnvConfig}
-                    loading={savingEnv}
-                  >
-                    保存
-                  </Button>
-                  <Button 
-                    size="small"
-                    variant="text" 
-                    onClick={() => {
-                      setShowEnvConfig(false);
-                      setEnvConfig({ apiKey: '', authToken: '', internetEnv: '', baseUrl: '' });
-                    }}
-                  >
-                    取消
-                  </Button>
-                  <span 
-                    className="text-xs"
-                    style={{ color: 'var(--td-text-color-placeholder)' }}
-                  >
-                    仅当前进程有效
-                  </span>
+                <div
+                  className="text-xs"
+                  style={{ color: 'var(--td-text-color-secondary)' }}
+                >
+                  角色：
+                  <Tag size="small" variant="outline" style={{ marginLeft: 6 }}>
+                    {user.role === 'admin' ? '管理员' : user.role === 'agent' ? '客服' : '访客'}
+                  </Tag>
                 </div>
               </div>
-            ) : (
-              <Button 
-                variant="outline" 
-                size="small"
-                onClick={() => setShowEnvConfig(true)}
-              >
-                配置环境变量
-              </Button>
-            )}
-          </div>
-          
-          {/* CLI 登录 */}
-          <div>
-            <h3 
-              className="text-sm font-medium mb-3"
-              style={{ color: 'var(--td-text-color-secondary)' }}
-            >
-              方式二：CodeBuddy CLI
-            </h3>
-            <div className="flex items-center gap-3">
-              <code 
-                className="px-3 py-1.5 rounded text-sm"
-                style={{ 
-                  backgroundColor: 'var(--td-bg-color-component)',
-                  color: 'var(--td-text-color-primary)'
-                }}
-              >
-                codebuddy
-              </code>
-              <Link 
-                href="https://www.codebuddy.ai/docs/zh/cli/settings" 
-                target="_blank"
-                theme="primary"
-                size="small"
-              >
-                查看文档
-              </Link>
-            </div>
-          </div>
-          
-          {loginStatus.error && !loginStatus.isLoggedIn && (
-            <div 
-              className="text-xs mt-4"
-              style={{ color: 'var(--td-text-color-placeholder)' }}
-            >
-              {loginStatus.error}
             </div>
           )}
         </div>

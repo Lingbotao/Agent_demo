@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Message, ToolCall, PermissionRequest, PermissionMode, Session, CustomAgent, ContentBlock, CSAgentWorkflowMeta } from '../types';
+import { useAuth } from './useAuth';
 
 const STORAGE_KEYS = {
   draftInput: 'draftInput',
@@ -35,6 +36,7 @@ export function useChat(options: UseChatOptions) {
     setCurrentSessionId,
     setSessions,
   } = options;
+  const { authHeader } = useAuth();
 
   const [isLoading, setIsLoading] = useState(false);
   const [inputValue, setInputValue] = useState(() => {
@@ -139,7 +141,7 @@ export function useChat(options: UseChatOptions) {
 
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({
           sessionId,
           message: messageContent,
@@ -390,15 +392,15 @@ export function useChat(options: UseChatOptions) {
     
     await fetch('/api/permission-response', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify({
         requestId: permissionRequest.requestId,
         behavior: 'allow'
       })
     });
-    
+
     setPermissionRequest(null);
-  }, [permissionRequest]);
+  }, [permissionRequest, authHeader]);
 
   // 处理权限拒绝
   const handlePermissionDeny = useCallback(async () => {
@@ -408,16 +410,16 @@ export function useChat(options: UseChatOptions) {
     
     await fetch('/api/permission-response', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify({
         requestId: permissionRequest.requestId,
         behavior: 'deny',
         message: '用户拒绝了此操作'
       })
     });
-    
+
     setPermissionRequest(null);
-  }, [permissionRequest]);
+  }, [permissionRequest, authHeader]);
 
   return {
     isLoading,
