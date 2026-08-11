@@ -56,7 +56,7 @@ router.get('/conversations/:sessionId', (req: Request, res: Response) => {
   try {
     const { sessionId } = req.params;
     const session = db.getSession(sessionId);
-    
+
     if (!session) {
       return res.status(404).json({ error: '会话不存在' });
     }
@@ -64,11 +64,31 @@ router.get('/conversations/:sessionId', (req: Request, res: Response) => {
     const messages = db.getMessagesBySession(sessionId);
     const satisfaction = db.getSatisfactionBySession(sessionId);
 
+    // 关联意图 + workflowMeta（与 /api/sessions/:id 保持一致）
+    const intentRows = db.getIntentsBySession(sessionId);
+    const intentByAssistant = new Map<string, { intent: string; confidence: number }>();
+    let pendingIntent: { intent: string; confidence: number } | null = null;
+    for (const msg of messages) {
+      if (msg.role === 'user') {
+        const r = intentRows.find((r) => r.message_id === msg.id);
+        pendingIntent = r ? { intent: r.intent, confidence: r.confidence } : null;
+      } else if (msg.role === 'assistant' && pendingIntent) {
+        intentByAssistant.set(msg.id, pendingIntent);
+        pendingIntent = null;
+      }
+    }
+
     res.json({
       session,
       messages: messages.map(msg => ({
         ...msg,
         tool_calls: msg.tool_calls ? JSON.parse(msg.tool_calls) : null,
+        intent: msg.role === 'assistant' ? intentByAssistant.get(msg.id)?.intent ?? null : null,
+        intent_confidence: msg.role === 'assistant' ? intentByAssistant.get(msg.id)?.confidence ?? null : null,
+        used_faq: msg.role === 'assistant' ? !!msg.used_faq : false,
+        should_escalate: msg.role === 'assistant' ? !!msg.should_escalate : false,
+        ticket_id: msg.role === 'assistant' ? msg.ticket_id ?? null : null,
+        faq_score: msg.role === 'assistant' ? msg.faq_score ?? null : null,
       })),
       satisfaction: satisfaction || null,
     });

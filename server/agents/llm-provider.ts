@@ -13,6 +13,8 @@ interface LLMChatOptions {
   maxTokens?: number;
   temperature?: number;
   onText?: (text: string) => void;
+  /** 历史对话（OpenAI Chat Completions 风格，按时间顺序） */
+  history?: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
 }
 
 interface LLMResponse {
@@ -106,6 +108,16 @@ class OpenAICompatibleProvider implements LLMProvider {
     if (options.systemPrompt) {
       messages.push({ role: 'system', content: options.systemPrompt });
     }
+
+    // 注入历史对话（按时间顺序），形成真正的多轮上下文
+    if (options.history && options.history.length > 0) {
+      for (const h of options.history) {
+        if (h && h.role && h.content) {
+          messages.push({ role: h.role, content: h.content });
+        }
+      }
+    }
+
     messages.push({ role: 'user', content: options.prompt });
 
     const response = await fetch(`${this.baseUrl}/chat/completions`, {

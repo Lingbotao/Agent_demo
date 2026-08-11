@@ -111,9 +111,9 @@ export function PermissionDialog({ visible, request, onAllow, onDeny }: Permissi
         {/* 工具标签 */}
         <div className="flex items-center gap-2">
           <span style={{ color: 'var(--td-text-color-secondary)' }}>工具：</span>
-          <Tag 
-            theme="primary" 
-            variant="light"
+          <Tag
+            theme="primary"
+            variant="dark"
             icon={toolConfig.icon}
           >
             {toolConfig.label}

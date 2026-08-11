@@ -56,7 +56,16 @@ export function useSessions() {
           content: m.content,
           model: m.model,
           timestamp: new Date(m.created_at),
-          toolCalls: m.tool_calls || undefined
+          toolCalls: m.tool_calls || undefined,
+          intent: m.intent || undefined,
+          intentConfidence: m.intent_confidence ?? undefined,
+          workflowMeta: m.role === 'assistant' && (m.used_faq || m.should_escalate) ? {
+            intent: m.intent ?? null,
+            usedFaq: !!m.used_faq,
+            shouldEscalate: !!m.should_escalate,
+            ticketId: m.ticket_id ?? null,
+            faqScore: m.faq_score ?? 0,
+          } : undefined,
         }));
         
         setSessions(prev => prev.map(s => 

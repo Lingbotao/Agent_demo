@@ -128,6 +128,29 @@ try {
   // 忽略错误（列可能已存在）
 }
 
+// 给 messages 表添加工作流元数据列（持久化 usedFaq / shouldEscalate，刷新后仍可见）
+try {
+  const msgCols = db.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+  if (!msgCols.some(c => c.name === 'used_faq')) {
+    db.exec("ALTER TABLE messages ADD COLUMN used_faq INTEGER DEFAULT 0");
+    console.log("[DB] Added used_faq column to messages table");
+  }
+  if (!msgCols.some(c => c.name === 'should_escalate')) {
+    db.exec("ALTER TABLE messages ADD COLUMN should_escalate INTEGER DEFAULT 0");
+    console.log("[DB] Added should_escalate column to messages table");
+  }
+  if (!msgCols.some(c => c.name === 'ticket_id')) {
+    db.exec("ALTER TABLE messages ADD COLUMN ticket_id TEXT");
+    console.log("[DB] Added ticket_id column to messages table");
+  }
+  if (!msgCols.some(c => c.name === 'faq_score')) {
+    db.exec("ALTER TABLE messages ADD COLUMN faq_score REAL");
+    console.log("[DB] Added faq_score column to messages table");
+  }
+} catch (e) {
+  // 忽略错误
+}
+
 // 类型定义
 export interface DbSession {
   id: string;
@@ -146,6 +169,10 @@ export interface DbMessage {
   model: string | null;
   created_at: string;
   tool_calls: string | null;
+  used_faq?: boolean;
+  should_escalate?: boolean;
+  ticket_id?: string | null;
+  faq_score?: number | null;
 }
 
 // ============= 会话操作 =============
@@ -219,8 +246,8 @@ export function getMessagesBySession(sessionId: string): DbMessage[] {
 // 创建消息
 export function createMessage(message: DbMessage): DbMessage {
   const stmt = db.prepare(`
-    INSERT INTO messages (id, session_id, role, content, model, created_at, tool_calls)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (id, session_id, role, content, model, created_at, tool_calls, used_faq, should_escalate, ticket_id, faq_score)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   stmt.run(
     message.id,
@@ -229,7 +256,11 @@ export function createMessage(message: DbMessage): DbMessage {
     message.content,
     message.model,
     message.created_at,
-    message.tool_calls
+    message.tool_calls,
+    message.used_faq ? 1 : 0,
+    message.should_escalate ? 1 : 0,
+    message.ticket_id ?? null,
+    message.faq_score ?? null
   );
   
   // 更新会话的 updated_at
@@ -271,17 +302,17 @@ export function deleteMessage(id: string): boolean {
 
 // 批量创建消息（用于保存对话）
 export function createMessages(messages: DbMessage[]): void {
+  if (messages.length === 0) return;
   const stmt = db.prepare(`
-    INSERT INTO messages (id, session_id, role, content, model, created_at, tool_calls)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (id, session_id, role, content, model, created_at, tool_calls, used_faq, should_escalate, ticket_id, faq_score)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  
   const insertMany = db.transaction((msgs: DbMessage[]) => {
-    for (const msg of msgs) {
-      stmt.run(msg.id, msg.session_id, msg.role, msg.content, msg.model, msg.created_at, msg.tool_calls);
+    for (const m of msgs) {
+      stmt.run(m.id, m.session_id, m.role, m.content, m.model, m.created_at, m.tool_calls,
+        m.used_faq ? 1 : 0, m.should_escalate ? 1 : 0, m.ticket_id ?? null, m.faq_score ?? null);
     }
   });
-  
   insertMany(messages);
 }
 
@@ -460,6 +491,17 @@ export function recordIntent(record: Omit<ConversationIntent, 'id' | 'created_at
     'INSERT INTO conversation_intents (id, session_id, message_id, intent, confidence, faq_matched, faq_score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(entry.id, entry.session_id, entry.message_id, entry.intent, entry.confidence, entry.faq_matched, entry.faq_score, entry.created_at);
   return entry;
+}
+
+/** 获取某会话的全部意图记录（按 message_id） */
+export function getIntentsBySession(sessionId: string): Array<{
+  message_id: string;
+  intent: string;
+  confidence: number;
+}> {
+  return db.prepare(
+    'SELECT message_id, intent, confidence FROM conversation_intents WHERE session_id = ?'
+  ).all(sessionId) as Array<{ message_id: string; intent: string; confidence: number }>;
 }
 
 export interface IntentStats {

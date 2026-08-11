@@ -40,12 +40,45 @@ export function ChatMessages({
       .trim() || name;
   };
 
-  // 渲染单个内容块
-  const renderContentBlock = (block: ContentBlock, index: number, isStreaming?: boolean, isLast?: boolean) => {
-    if (block.type === 'text') {
+  // 把单个文本块按 <think>...</think> 拆成 [think | text] 段，think 用弱化样式渲染
+  const renderTextBlock = (text: string, baseKey: string, isStreaming?: boolean, isLast?: boolean) => {
+    const parts: Array<{ kind: 'think' | 'text'; content: string }> = [];
+    const regex = /<think>([\s\S]*?)(?:<\/think>|$)/g;
+    let lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(text)) !== null) {
+      if (m.index > lastIndex) {
+        parts.push({ kind: 'text', content: text.slice(lastIndex, m.index) });
+      }
+      parts.push({ kind: 'think', content: m[1] });
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      parts.push({ kind: 'text', content: text.slice(lastIndex) });
+    }
+    if (parts.length === 0) parts.push({ kind: 'text', content: text });
+
+    return parts.map((part, i) => {
+      const isLastPart = i === parts.length - 1;
+      if (part.kind === 'think') {
+        return (
+          <div
+            key={`${baseKey}-think-${i}`}
+            className="px-3 py-2 text-xs italic leading-relaxed break-words"
+            style={{
+              color: 'var(--td-text-color-placeholder)',
+              borderLeft: '2px solid var(--td-component-stroke)',
+              borderRadius: '4px',
+              backgroundColor: 'transparent',
+            }}
+          >
+            <div className="opacity-80">{part.content}</div>
+          </div>
+        );
+      }
       return (
-        <div 
-          key={`text-${index}`}
+        <div
+          key={`${baseKey}-text-${i}`}
           className="px-4 py-3 leading-relaxed break-words"
           style={{
             backgroundColor: 'var(--td-bg-color-component)',
@@ -54,16 +87,27 @@ export function ChatMessages({
           }}
         >
           <div className="chat-markdown">
-            <ChatMarkdown content={block.text} />
+            <ChatMarkdown content={part.content} />
           </div>
-          {isStreaming && isLast && (
-            <span 
+          {isStreaming && isLast && isLastPart && (
+            <span
               className="animate-cursor-blink ml-0.5"
               style={{ color: 'var(--td-brand-color)' }}
             >
               |
             </span>
           )}
+        </div>
+      );
+    });
+  };
+
+  // 渲染单个内容块
+  const renderContentBlock = (block: ContentBlock, index: number, isStreaming?: boolean, isLast?: boolean) => {
+    if (block.type === 'text') {
+      return (
+        <div key={`text-${index}`} className="flex flex-col gap-2">
+          {renderTextBlock(block.text, `b${index}`, isStreaming, isLast)}
         </div>
       );
     } else if (block.type === 'tool_use') {
@@ -97,25 +141,8 @@ export function ChatMessages({
           />
         )}
         {message.content && (
-          <div 
-            className="px-4 py-3 leading-relaxed break-words"
-            style={{
-              backgroundColor: 'var(--td-bg-color-component)',
-              color: 'var(--td-text-color-primary)',
-              borderRadius: '16px 16px 16px 4px'
-            }}
-          >
-            <div className="chat-markdown">
-              <ChatMarkdown content={message.content} />
-            </div>
-            {message.isStreaming && (
-              <span 
-                className="animate-cursor-blink ml-0.5"
-                style={{ color: 'var(--td-brand-color)' }}
-              >
-                |
-              </span>
-            )}
+          <div className="flex flex-col gap-2">
+            {renderTextBlock(message.content, 'legacy', message.isStreaming, true)}
           </div>
         )}
       </>
@@ -155,7 +182,7 @@ export function ChatMessages({
                 </span>
                 {/* 意图标签 */}
                 {message.intent && INTENT_LABELS[message.intent] && (
-                  <Tag size="small" theme={INTENT_LABELS[message.intent].theme} variant="light">
+                  <Tag size="small" theme={INTENT_LABELS[message.intent].theme} variant="dark">
                     {INTENT_LABELS[message.intent].label}
                   </Tag>
                 )}
@@ -164,21 +191,21 @@ export function ChatMessages({
 
             {/* 工作流元数据 */}
             {message.workflowMeta && (
-              <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--td-text-color-placeholder)' }}>
+              <div className="flex items-center gap-2 text-xs">
                 {message.workflowMeta.usedFaq && (
-                  <span className="flex items-center gap-1">
-                    <FileSearch size={12} /> 知识库匹配
-                  </span>
+                  <Tag size="small" theme="primary" variant="dark" icon={<FileSearch size={12} />}>
+                    知识库匹配
+                  </Tag>
                 )}
                 {message.workflowMeta.shouldEscalate && (
-                  <span className="flex items-center gap-1" style={{ color: 'var(--td-warning-color)' }}>
-                    <AlertCircle size={12} /> 已转人工
-                  </span>
+                  <Tag size="small" theme="warning" variant="dark" icon={<AlertCircle size={12} />}>
+                    已转人工
+                  </Tag>
                 )}
                 {!message.workflowMeta.usedFaq && !message.workflowMeta.shouldEscalate && (
-                  <span className="flex items-center gap-1">
-                    <CheckCircle2 size={12} style={{ color: 'var(--td-success-color)' }} /> AI 回复
-                  </span>
+                  <Tag size="small" theme="success" variant="dark" icon={<CheckCircle2 size={12} />}>
+                    AI 回复
+                  </Tag>
                 )}
               </div>
             )}

@@ -3,8 +3,6 @@
  * 用于 LangGraph 状态图
  */
 
-import type { BaseMessage } from "@langchain/core/messages";
-
 /** 支持的意图类型 */
 export type IntentType = 'refund' | 'order_inquiry' | 'tech_support' | 'general';
 
@@ -17,10 +15,16 @@ export interface FaqResult {
   score: number;
 }
 
+/** 对话消息（轻量版，按 OpenAI Chat Completions 风格） */
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
 /** LangGraph 工作流状态 */
 export interface CSAgentState {
   /** 对话消息历史 */
-  messages: BaseMessage[];
+  messages: ChatMessage[];
   /** 当前用户输入 */
   userInput: string;
   /** 会话 ID */
@@ -52,7 +56,7 @@ export function createInitialState(input: {
   userInput: string;
   sessionId: string;
   messageId: string;
-  messages?: BaseMessage[];
+  messages?: ChatMessage[];
 }): CSAgentState {
   return {
     messages: input.messages || [],

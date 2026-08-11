@@ -40,7 +40,7 @@ export async function agentNode(
   state: CSAgentState,
   onText?: (text: string) => void
 ): Promise<Partial<CSAgentState>> {
-  const { userInput, intent, faqResults } = state;
+  const { userInput, intent, faqResults, messages } = state;
 
   console.log(`[Agent] 调用 LLM Provider, 意图: ${intent}`);
 
@@ -76,6 +76,9 @@ export async function agentNode(
       prompt: userInput,
       systemPrompt: fullSystemPrompt,
       onText,
+      history: messages
+        .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
+        .map((m) => ({ role: m.role, content: m.content })),
     });
 
     let fullResponse = result.content;

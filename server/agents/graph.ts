@@ -21,7 +21,7 @@ import { classifyIntent } from './intent.js';
 import { ragNode, shouldUseFaqAnswer, getFaqResponse } from './rag.js';
 import { agentNode } from './agent.js';
 import { escalationNode } from './escalation.js';
-import type { CSAgentState } from './types.js';
+import type { CSAgentState, ChatMessage } from './types.js';
 import { createInitialState } from './types.js';
 
 /** 工作流节点类型 */
@@ -117,18 +117,21 @@ export class CSAgentWorkflow {
    * @param sessionId 会话 ID
    * @param messageId 消息 ID
    * @param onText 流式文本回调
+   * @param history 历史对话（按时间顺序）
    * @returns 最终状态
    */
   async run(
     userInput: string,
     sessionId: string,
     messageId: string,
-    onText?: (text: string) => void
+    onText?: (text: string) => void,
+    history?: ChatMessage[]
   ): Promise<CSAgentState> {
     const initialState = createInitialState({
       userInput,
       sessionId,
       messageId,
+      messages: history || [],
     });
 
     console.log(`\n[Workflow] ===== 开始执行 =====`);

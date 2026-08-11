@@ -1,3 +1,5 @@
+import * as dotenv from 'dotenv';
+dotenv.config();
 import express from "express";
 import { query, unstable_v2_createSession, PermissionResult, CanUseTool } from "@tencent-ai/agent-sdk";
 import { v4 as uuidv4 } from "uuid";
@@ -199,19 +201,42 @@ app.get("/api/sessions/:sessionId", (req, res) => {
   try {
     const { sessionId } = req.params;
     const session = db.getSession(sessionId);
-    
+
     if (!session) {
       return res.status(404).json({ error: "会话不存在" });
     }
-    
+
     const messages = db.getMessagesBySession(sessionId);
-    
-    // 解析 tool_calls JSON
+
+    // 关联意图记录：把 conversation_intents 按 message_id 关联到对应 assistant 消息上
+    // 注意：recordIntent 保存的是 user 消息的 id（因为意图是用户这句话触发的），
+    // 前端要把 intent 渲染在它之后那个 assistant 回复上。
+    const intentRows = db.getIntentsBySession(sessionId);
+    // 按会话时间顺序遍历，找到每个 intent 关联的 user message 之后的第一个 assistant message
+    const intentByAssistant = new Map<string, { intent: string; confidence: number }>();
+    let pendingIntent: { intent: string; confidence: number } | null = null;
+    for (const msg of messages) {
+      if (msg.role === 'user') {
+        const r = intentRows.find((r) => r.message_id === msg.id);
+        pendingIntent = r ? { intent: r.intent, confidence: r.confidence } : null;
+      } else if (msg.role === 'assistant' && pendingIntent) {
+        intentByAssistant.set(msg.id, pendingIntent);
+        pendingIntent = null;
+      }
+    }
+
+    // 解析 tool_calls JSON，并附加 intent / workflowMeta
     const parsedMessages = messages.map(msg => ({
       ...msg,
-      tool_calls: msg.tool_calls ? JSON.parse(msg.tool_calls) : null
+      tool_calls: msg.tool_calls ? JSON.parse(msg.tool_calls) : null,
+      intent: msg.role === 'assistant' ? intentByAssistant.get(msg.id)?.intent ?? null : null,
+      intent_confidence: msg.role === 'assistant' ? intentByAssistant.get(msg.id)?.confidence ?? null : null,
+      used_faq: msg.role === 'assistant' ? !!msg.used_faq : false,
+      should_escalate: msg.role === 'assistant' ? !!msg.should_escalate : false,
+      ticket_id: msg.role === 'assistant' ? msg.ticket_id ?? null : null,
+      faq_score: msg.role === 'assistant' ? msg.faq_score ?? null : null,
     }));
-    
+
     res.json({ session, messages: parsedMessages });
   } catch (error: any) {
     console.error("[Session] Error:", error);
@@ -376,6 +401,35 @@ app.post("/api/chat", requireAuth, async (req, res) => {
 
   // 默认系统提示词
   const defaultSystemPrompt = "你是一个专业的AI助手，善于帮助用户解决各种问题。请用简洁清晰的方式回答问题。";
+
+  // 检查 SDK 是否可用：未配置 CODEBUDDY_API_KEY 时不要去碰 SDK query()，否则会抛 Authentication required
+  if (!process.env.CODEBUDDY_API_KEY) {
+    console.error(`[Chat] 未配置 CODEBUDDY_API_KEY，无法调用 SDK 模型 ${selectedModel}`);
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.write(`data: ${JSON.stringify({ type: "init", sessionId: session.id, userMessageId, assistantMessageId, model: selectedModel })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      type: "text",
+      content: `当前模型 \`${selectedModel}\` 需要 CodeBuddy SDK，请选择「智能客服 Agent (cs-agent)」或在服务端设置 \`CODEBUDDY_API_KEY\`。`,
+    })}\n\n`);
+    // 持久化错误提示，便于历史回看
+    try {
+      db.createMessage({
+        id: assistantMessageId,
+        session_id: session.id,
+        role: 'assistant',
+        content: `当前模型 \`${selectedModel}\` 需要 CodeBuddy SDK，请选择「智能客服 Agent (cs-agent)」或在服务端设置 \`CODEBUDDY_API_KEY\`。`,
+        model: selectedModel,
+        created_at: now,
+        tool_calls: null,
+      });
+    } catch (dbError: any) {
+      console.error(`[Chat] 保存错误占位消息失败:`, dbError);
+    }
+    res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+    return res.end();
+  }
   
   // 工作目录：优先使用请求中的 cwd，否则使用当前目录
   const workingDir = cwd || process.cwd();
@@ -681,6 +735,18 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
     tool_calls: null,
   });
 
+  // 加载历史对话（剔除当前这条尚未生成回复的 user 消息），注入工作流状态
+  const HISTORY_LIMIT = 20;
+  const dbHistory = db.getMessagesBySession(session.id);
+  const historyMessages = dbHistory
+    .filter((m) => m.id !== userMessageId)
+    .slice(-HISTORY_LIMIT)
+    .map((m) => ({
+      role: (m.role === 'user' || m.role === 'assistant' || m.role === 'system') ? m.role : 'user',
+      content: m.content || '',
+    })) as Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
+  console.log(`[CS-Agent] 加载历史 ${historyMessages.length} 条`);
+
   // 设置 SSE
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -720,7 +786,8 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
           type: "text",
           content: text,
         })}\n\n`);
-      }
+      },
+      historyMessages
     );
 
     console.log(`[CS-Agent] 工作流结果: intent=${finalState.intent}, usedFaq=${finalState.usedFaq}, escalated=${finalState.shouldEscalate}`);
@@ -744,6 +811,10 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
       model: 'cs-agent',
       created_at: new Date().toISOString(),
       tool_calls: null,
+      used_faq: !!finalState.usedFaq,
+      should_escalate: !!finalState.shouldEscalate,
+      ticket_id: finalState.ticketId ?? null,
+      faq_score: finalState.faqResults?.[0]?.score ?? null,
     });
 
     // 更新会话标题
