@@ -159,17 +159,3 @@ npm run build
 # 运行生产版本
 npm start
 ```
-
-## 二次开发
-
-如果你想基于这个模板进行定制化开发，请查看 [DEVELOPMENT.md](./DEVELOPMENT.md) 获取详细指南，包括：
-
-- 项目架构详解
-- 核心功能实现原理
-- 10+ 常见定制场景示例
-- API 完整参考
-- 调试和部署指南
-
-## License
-
-MIT
