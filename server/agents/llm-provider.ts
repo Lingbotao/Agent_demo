@@ -23,6 +23,11 @@ interface LLMChatOptions {
   onText?: (text: string) => void;
   /** 历史对话（OpenAI Chat Completions 风格，按时间顺序） */
   history?: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
+  /**
+   * 直接传入已构建好的 LangChain 消息数组（优先级最高）
+   * 如果提供此字段，忽略 prompt / systemPrompt / history
+   */
+  messages?: (SystemMessage | HumanMessage | AIMessage)[];
 }
 
 interface LLMResponse {
@@ -93,7 +98,8 @@ class LangChainChatProvider implements LLMProvider {
           })
         : this.llm;
 
-    const messages = buildMessages(options);
+    // 消息构建：优先使用传入的 messages
+    const messages = options.messages || buildMessages(options);
 
     // 流式模式
     if (options.onText) {

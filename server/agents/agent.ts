@@ -1,15 +1,21 @@
 /**
  * Agent 对话节点
- * 通过统一 LLM Provider 进行智能对话
- * 支持: MiniMax / OpenAI / 任意 OpenAI 兼容 API
+ * 使用 LangChain ChatPromptTemplate 管理提示词模板与历史消息注入，
+ * 通过统一 LLM Provider 调用 MiniMax / OpenAI 等后端。
  */
 
-import { getLLMProvider } from './llm-provider.js';
-import type { CSAgentState } from './types.js';
-import * as db from '../db.js';
+import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
+import { SystemMessage, HumanMessage, AIMessage } from "@langchain/core/messages";
+import { getLLMProvider } from "./llm-provider.js";
+import type { CSAgentState } from "./types.js";
+import * as db from "../db.js";
 
-/** 智能客服系统提示词 */
-const CS_SYSTEM_PROMPT = `你是一个专业的智能客服助手。你的职责是帮助用户解决问题。
+// ---- 提示词模板 ----
+
+const AGENT_PROMPT = ChatPromptTemplate.fromMessages([
+  [
+    "system",
+    `你是一个专业的智能客服助手。你的职责是帮助用户解决问题。
 
 ## 工作原则
 1. 热情友好，耐心解答用户的问题
@@ -31,63 +37,58 @@ const CS_SYSTEM_PROMPT = `你是一个专业的智能客服助手。你的职责
 - 用户情绪激动或明确要求转人工
 - 连续两轮无法解决用户问题
 
-请尽全力帮助用户！`;
+{context}
 
-/**
- * LangGraph Agent 对话节点
- */
+请尽全力帮助用户！`,
+  ],
+  new MessagesPlaceholder("history"),
+  ["human", "{user_input}"],
+]);
+
+// ---- 节点函数 ----
+
 export async function agentNode(
   state: CSAgentState,
-  onText?: (text: string) => void
+  onText?: (text: string) => void,
 ): Promise<Partial<CSAgentState>> {
   const { userInput, intent, faqResults, messages } = state;
 
   console.log(`[Agent] 调用 LLM Provider, 意图: ${intent}`);
 
   try {
-    // 构建上下文信息
-    const contextParts: string[] = [];
+    // 构建上下文变量
+    const context = buildContext(intent, faqResults);
 
-    if (intent && intent !== 'general') {
-      contextParts.push(`用户意图: ${intent}`);
-    }
+    // 通过 ChatPromptTemplate 构建消息数组
+    const promptMessages = await AGENT_PROMPT.formatMessages({
+      context,
+      user_input: userInput,
+      history: messages
+        .filter((m) => m && (m.role === "user" || m.role === "assistant") && m.content)
+        .map((m) =>
+          m.role === "user"
+            ? new HumanMessage(m.content)
+            : new AIMessage(m.content),
+        ),
+    });
 
-    if (faqResults.length > 0) {
-      const topFaq = faqResults[0];
-      if (topFaq.score >= 0.4) {
-        contextParts.push(
-          `相关 FAQ 参考（仅供参考，请根据实际情况回答）: ` +
-          `"${topFaq.question}" → "${topFaq.answer}"`
-        );
-      }
-    }
-
-    const contextPrompt = contextParts.length > 0
-      ? `\n\n## 当前上下文\n${contextParts.join('\n')}\n`
-      : '';
-
-    const fullSystemPrompt = CS_SYSTEM_PROMPT + contextPrompt;
-
-    // 通过统一 LLM Provider 调用
+    // 调用 LLM
     const provider = await getLLMProvider();
     console.log(`[Agent] Provider: ${provider.name}`);
 
     const result = await provider.chat({
-      prompt: userInput,
-      systemPrompt: fullSystemPrompt,
+      prompt: "", // 由 messages 字段接管
+      messages: promptMessages as (SystemMessage | HumanMessage | AIMessage)[],
       onText,
-      history: messages
-        .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
-        .map((m) => ({ role: m.role, content: m.content })),
     });
 
     let fullResponse = result.content;
-
     if (!fullResponse) {
-      fullResponse = '抱歉，我暂时无法处理您的问题。建议您转接人工客服获取更专业的帮助。请输入"转人工"联系人工客服。';
+      fullResponse =
+        "抱歉，我暂时无法处理您的问题。" +
+        '建议您转接人工客服获取更专业的帮助。请输入"转人工"联系人工客服。';
     }
 
-    // 检查是否需要转人工
     const shouldEscalate = checkEscalationNeeded(fullResponse, userInput);
 
     // 记录意图
@@ -95,24 +96,21 @@ export async function agentNode(
       db.recordIntent({
         session_id: state.sessionId,
         message_id: state.messageId,
-        intent: state.intent || 'general',
+        intent: state.intent || "general",
         confidence: state.intentConfidence,
         faq_matched: null,
         faq_score: null,
       });
-    } catch (e) {
+    } catch {
       // 忽略
     }
 
-    return {
-      finalResponse: fullResponse,
-      shouldEscalate,
-      usedFaq: false,
-    };
+    return { finalResponse: fullResponse, shouldEscalate, usedFaq: false };
   } catch (error: any) {
-    console.error('[Agent] LLM 调用失败:', error.message);
+    console.error("[Agent] LLM 调用失败:", error.message);
     return {
-      finalResponse: '抱歉，服务暂时不可用。请稍后再试，或者输入"转人工"联系人工客服。',
+      finalResponse:
+        '抱歉，服务暂时不可用。请稍后再试，或者输入\u201C转人工\u201D联系人工客服。',
       shouldEscalate: true,
       error: error.message,
       usedFaq: false,
@@ -120,24 +118,35 @@ export async function agentNode(
   }
 }
 
-/** 判断是否需要转人工 */
-function checkEscalationNeeded(response: string, userInput: string): boolean {
-  const lowerResponse = response.toLowerCase();
+// ---- 工具函数 ----
 
-  const suggestionPatterns = [
-    '转人工', '人工客服', '人工服务', '联系客服',
-    '无法处理', '无法解决', '能力有限', '超出范围',
-    '建议您联系', '请联系我们的人工',
-  ];
+function buildContext(intent: string | null, faqResults: Array<{ question: string; answer: string; score: number }>): string {
+  const parts: string[] = [];
 
-  for (const pattern of suggestionPatterns) {
-    if (lowerResponse.includes(pattern)) {
-      return true;
-    }
+  if (intent && intent !== "general") {
+    parts.push(`用户意图: ${intent}`);
   }
 
-  const userRequestHuman = /转人工|人工客服|人工服务|找人工|找客服人员/i.test(userInput);
-  if (userRequestHuman) return true;
+  const topFaq = faqResults[0];
+  if (topFaq && topFaq.score >= 0.4) {
+    parts.push(
+      `相关 FAQ 参考（仅供参考，请根据实际情况回答）: ` +
+        `"${topFaq.question}" → "${topFaq.answer}"`,
+    );
+  }
 
-  return false;
+  return parts.length > 0 ? `\n## 当前上下文\n${parts.join("\n")}\n` : "";
+}
+
+function checkEscalationNeeded(response: string, userInput: string): boolean {
+  const lowerResponse = response.toLowerCase();
+  const suggestionPatterns = [
+    "转人工", "人工客服", "人工服务", "联系客服",
+    "无法处理", "无法解决", "能力有限", "超出范围",
+    "建议您联系", "请联系我们的人工",
+  ];
+  for (const pattern of suggestionPatterns) {
+    if (lowerResponse.includes(pattern)) return true;
+  }
+  return /转人工|人工客服|人工服务|找人工|找客服人员/i.test(userInput);
 }
