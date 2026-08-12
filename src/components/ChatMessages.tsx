@@ -1,9 +1,8 @@
 import { Loading, Tag } from 'tdesign-react';
 import { ChatMarkdown } from '@tdesign-react/chat';
 import { User, Bot, AlertCircle, CheckCircle2, FileSearch } from 'lucide-react';
-import { Message, Model, PermissionRequest, ContentBlock } from '../types';
+import { Message, Model, ContentBlock } from '../types';
 import { ToolCallsCollapse } from './ToolCallsCollapse';
-import { InlinePermissionCard } from './InlinePermissionCard';
 
 /** 意图标签映射 */
 const INTENT_LABELS: Record<string, { label: string; theme: 'primary' | 'success' | 'warning' | 'danger' }> = {
@@ -17,19 +16,12 @@ interface ChatMessagesProps {
   messages: Message[];
   models: Model[];
   messagesEndRef: React.RefObject<HTMLDivElement>;
-  // 内联权限确认相关
-  permissionRequest?: PermissionRequest | null;
-  onPermissionAllow?: () => void;
-  onPermissionDeny?: () => void;
 }
 
-export function ChatMessages({ 
-  messages, 
-  models, 
+export function ChatMessages({
+  messages,
+  models,
   messagesEndRef,
-  permissionRequest,
-  onPermissionAllow,
-  onPermissionDeny
 }: ChatMessagesProps) {
   const formatModelName = (modelId: string) => {
     const model = models.find(m => m.modelId === modelId);
@@ -248,18 +240,7 @@ export function ChatMessages({
           </div>
         </div>
       ))}
-      
-      {/* 内联权限确认 - 横向简洁展示 */}
-      {permissionRequest && onPermissionAllow && onPermissionDeny && (
-        <div className="flex gap-3 ml-12">
-          <InlinePermissionCard
-            request={permissionRequest}
-            onAllow={onPermissionAllow}
-            onDeny={onPermissionDeny}
-          />
-        </div>
-      )}
-      
+
       <div ref={messagesEndRef} />
     </div>
   );

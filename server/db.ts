@@ -16,7 +16,7 @@ if (!fs.existsSync(dataDir)) {
 }
 
 // 创建数据库连接
-const db = new Database(dbPath);
+const db: Database.Database = new Database(dbPath);
 
 // 启用 WAL 模式以提高性能
 db.pragma('journal_mode = WAL');
@@ -156,7 +156,8 @@ export interface DbSession {
   id: string;
   title: string;
   model: string;
-  sdk_session_id: string | null;
+  /** 兼容历史字段：已不再由 SDK 提供，但保留表列与读取 */
+  sdk_session_id?: string | null;
   created_at: string;
   updated_at: string;
 }

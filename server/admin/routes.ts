@@ -20,11 +20,9 @@ router.get('/conversations', (req: Request, res: Response) => {
       const satisfaction = db.getSatisfactionBySession(session.id);
       
       // 获取该会话的意图记录
-      let intents: db.ConversationIntent[] = [];
+      let intents: Array<{ message_id: string; intent: string; confidence: number }> = [];
       try {
-        intents = (db as any).db?.prepare?.('SELECT * FROM conversation_intents WHERE session_id = ? ORDER BY created_at ASC')
-          ? db.getAllIntentsBySession?.(session.id) || []
-          : [];
+        intents = db.getIntentsBySession(session.id) || [];
       } catch {
         // conversation_intents 可能尚未初始化
       }

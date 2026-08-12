@@ -1,7 +1,7 @@
 /**
  * Agent 对话节点
  * 通过统一 LLM Provider 进行智能对话
- * 支持: CodeBuddy SDK / MiniMax / OpenAI / 任意 OpenAI 兼容 API
+ * 支持: MiniMax / OpenAI / 任意 OpenAI 兼容 API
  */
 
 import { getLLMProvider } from './llm-provider.js';

@@ -5,6 +5,14 @@ node_modules/
 dist/
 .vite/
 
+# ====== TypeScript Build Artifacts ======
+*.tsbuildinfo
+*.ts.map
+*.d.ts
+server/**/*.js
+vite.config.js
+vite.config.d.ts
+
 # ====== Environment ======
 .env
 .env.local
@@ -18,6 +26,10 @@ data/
 
 # ====== WorkBuddy Project Data ======
 .workbuddy/
+
+# ====== Test Coverage ======
+coverage/
+.nyc_output/
 
 # ====== macOS ======
 .DS_Store
@@ -38,6 +50,7 @@ Icon
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
 # ====== OS ======
 Thumbs.db

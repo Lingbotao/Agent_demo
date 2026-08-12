@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Dialog, Select, Input, Button } from 'tdesign-react';
 import { FolderOpenIcon } from 'tdesign-icons-react';
-import { Bot, Sparkles, Code, FileText, Globe, Lightbulb } from 'lucide-react';
+import { Bot, Sparkles, Code, FileText, Globe, Lightbulb, type LucideIcon } from 'lucide-react';
 import { CustomAgent, Model } from '../types';
 
 interface NewChatDialogProps {
@@ -14,7 +14,7 @@ interface NewChatDialogProps {
   defaultAgentId?: string;
 }
 
-const ICON_MAP: Record<string, React.ComponentType<{ size?: number; color?: string }>> = {
+const ICON_MAP: Record<string, LucideIcon> = {
   Bot,
   Sparkles,
   Code,

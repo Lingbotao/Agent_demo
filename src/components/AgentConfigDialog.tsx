@@ -253,30 +253,30 @@ export function AgentConfigDialog({
                 {PRESET_TEMPLATES.map(template => {
                   const Icon = getIconComponent(template.icon);
                   return (
-                    <Card 
-                      key={template.name} 
-                      bordered 
-                      hoverShadow
-                      className="cursor-pointer transition-all"
+                    <div
+                      key={template.name}
                       onClick={() => handleUseTemplate(template)}
+                      className="cursor-pointer transition-all"
                     >
-                      <div className="flex items-center gap-3 p-2">
-                        <div 
-                          className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
-                          style={{ backgroundColor: template.color }}
-                        >
-                          <Icon size={20} color="white" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium truncate" style={{ color: 'var(--td-text-color-primary)' }}>
-                            {template.name}
+                      <Card bordered hoverShadow>
+                        <div className="flex items-center gap-3 p-2">
+                          <div
+                            className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
+                            style={{ backgroundColor: template.color }}
+                          >
+                            <Icon size={20} color="white" />
                           </div>
-                          <div className="text-xs truncate" style={{ color: 'var(--td-text-color-placeholder)' }}>
-                            {template.description}
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate" style={{ color: 'var(--td-text-color-primary)' }}>
+                              {template.name}
+                            </div>
+                            <div className="text-xs truncate" style={{ color: 'var(--td-text-color-placeholder)' }}>
+                              {template.description}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </Card>
+                      </Card>
+                    </div>
                   );
                 })}
               </div>

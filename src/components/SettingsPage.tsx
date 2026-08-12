@@ -7,8 +7,7 @@ import {
   Tooltip,
   Popconfirm,
   MessagePlugin,
-  Tag,
-  Select
+  Tag
 } from 'tdesign-react';
 import {
   AddIcon,
@@ -17,7 +16,7 @@ import {
   CheckIcon,
 } from 'tdesign-icons-react';
 import { Bot, Sparkles, Code, FileText, Globe, Lightbulb, LogOutIcon } from 'lucide-react';
-import { CustomAgent, PermissionMode } from '../types';
+import { CustomAgent } from '../types';
 import { useAuth } from '../hooks/useAuth';
 
 interface SettingsPageProps {
@@ -37,15 +36,8 @@ const PRESET_ICONS = [
 ];
 
 const PRESET_COLORS = [
-  '#0052d9', '#0594fa', '#00a870', '#ed7b2f', 
+  '#0052d9', '#0594fa', '#00a870', '#ed7b2f',
   '#e34d59', '#a25eb5', '#5c6bc0', '#26a69a'
-];
-
-const PERMISSION_MODES: { value: PermissionMode; label: string; description: string }[] = [
-  { value: 'default', label: 'default', description: '默认模式，所有操作需确认' },
-  { value: 'acceptEdits', label: 'acceptEdits', description: '自动批准文件编辑，Bash 仍需确认' },
-  { value: 'plan', label: 'plan', description: '规划模式，仅允许读取操作' },
-  { value: 'bypassPermissions', label: 'bypassPermissions', description: '跳过所有权限检查（谨慎使用）' },
 ];
 
 const PRESET_TEMPLATES = [
@@ -97,7 +89,6 @@ export function SettingsPage({
     systemPrompt: '',
     icon: 'Bot',
     color: '#0052d9',
-    permissionMode: 'default' as PermissionMode,
   });
 
   const resetForm = () => {
@@ -107,7 +98,6 @@ export function SettingsPage({
       systemPrompt: '',
       icon: 'Bot',
       color: '#0052d9',
-      permissionMode: 'default',
     });
     setEditingAgent(null);
     setIsCreating(false);
@@ -122,7 +112,6 @@ export function SettingsPage({
       systemPrompt: agent.systemPrompt,
       icon: agent.icon || 'Bot',
       color: agent.color || '#0052d9',
-      permissionMode: agent.permissionMode || 'default',
     });
     setIsCreating(true);
   };
@@ -147,7 +136,6 @@ export function SettingsPage({
     setFormData({
       ...template,
       description: template.description,
-      permissionMode: 'default' as PermissionMode,
     });
     setIsCreating(true);
   };
@@ -336,28 +324,7 @@ export function SettingsPage({
                           </div>
                         </div>
                       </Form.FormItem>
-                      
-                      <Form.FormItem label="权限模式">
-                        <Select
-                          value={formData.permissionMode}
-                          onChange={(v) => setFormData(prev => ({ ...prev, permissionMode: v as PermissionMode }))}
-                          style={{ width: '100%' }}
-                        >
-                          {PERMISSION_MODES.map(mode => (
-                            <Select.Option key={mode.value} value={mode.value} label={mode.label}>
-                              <div className="flex flex-col py-1">
-                                <span className="font-mono text-sm" style={{ color: 'var(--td-success-color)' }}>
-                                  {mode.label}
-                                </span>
-                                <span className="text-xs" style={{ color: 'var(--td-text-color-placeholder)' }}>
-                                  {mode.description}
-                                </span>
-                              </div>
-                            </Select.Option>
-                          ))}
-                        </Select>
-                      </Form.FormItem>
-                      
+
                       <Form.FormItem label="系统提示词" requiredMark>
                         <Textarea 
                           value={formData.systemPrompt}

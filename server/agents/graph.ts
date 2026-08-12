@@ -10,7 +10,7 @@
  * 3. routeAfterRag: 判断 FAQ 匹配度是否足够直接返回
  *    - 高匹配 → 直接返回 FAQ 答案
  *    - 低匹配/无匹配 → 进入 Agent 对话
- * 4. agentRespond: 调用 CodeBuddy SDK 进行智能对话
+ * 4. agentRespond: 调用统一 LLM Provider 进行智能对话
  * 5. routeAfterAgent: 判断 Agent 回答是否需要转人工
  *    - 正常回答 → 返回给用户
  *    - 无法解决 → 进入转人工

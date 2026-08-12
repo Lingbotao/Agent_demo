@@ -2,7 +2,7 @@ import { Input } from 'tdesign-react';
 import { FolderOpenIcon } from 'tdesign-icons-react';
 import { Bot } from 'lucide-react';
 import { APP_CONFIG } from '../config';
-import { Model, Agent, PermissionMode } from '../types';
+import { Model, Agent } from '../types';
 import { ICON_MAP } from '../utils/iconMap';
 
 interface NewChatViewProps {
@@ -11,11 +11,9 @@ interface NewChatViewProps {
   selectedModel: string;
   newChatAgentId: string;
   newChatCwd: string;
-  newChatPermissionMode: PermissionMode;
   onSelectModel: (modelId: string) => void;
   onSelectAgent: (agentId: string) => void;
   onSetCwd: (cwd: string) => void;
-  onSetPermissionMode: (mode: PermissionMode) => void;
 }
 
 export function NewChatView({
@@ -24,7 +22,6 @@ export function NewChatView({
   newChatCwd,
   onSelectAgent,
   onSetCwd,
-  onSetPermissionMode,
 }: NewChatViewProps) {
   const selectedAgent = agents.find(a => a.id === newChatAgentId);
 
@@ -71,10 +68,6 @@ export function NewChatView({
                   }}
                   onClick={() => {
                     onSelectAgent(agent.id);
-                    // 自动应用 Agent 的默认权限模式
-                    if (agent.permissionMode) {
-                      onSetPermissionMode(agent.permissionMode);
-                    }
                   }}
                 >
                   <div className="flex items-center gap-3">
@@ -149,7 +142,7 @@ export function NewChatView({
         
         {/* 提示文字 */}
         <p className="text-center text-xs mt-6" style={{ color: 'var(--td-text-color-placeholder)' }}>
-          模型和权限模式可在输入框下方切换
+          模型可在输入框下方切换
         </p>
       </div>
     </div>

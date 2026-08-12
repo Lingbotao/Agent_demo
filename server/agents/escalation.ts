@@ -32,6 +32,8 @@ export async function escalationNode(state: CSAgentState): Promise<Partial<CSAge
       summary: state.userInput,
       status: 'pending',
       priority,
+      assigned_to: null,
+      resolution: null,
     });
 
     console.log(`[Escalation] 工单已创建: ${ticket.id}`);

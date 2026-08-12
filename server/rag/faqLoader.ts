@@ -143,7 +143,7 @@ export function initializeFaqKnowledge(): { loaded: number; total: number } {
 
 /** 向知识库添加单条 FAQ */
 export function addFaq(question: string, answer: string, category: string, keywords?: string): db.FaqKnowledge {
-  const faq = db.createFaq({ question, answer, category, keywords });
+  const faq = db.createFaq({ question, answer, category, keywords: keywords ?? null });
   getVectorStore().addEntry(faq);
   return faq;
 }

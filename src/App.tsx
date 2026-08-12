@@ -8,7 +8,6 @@ import { useSessions } from './hooks/useSessions';
 import { useModels } from './hooks/useModels';
 import { useChat } from './hooks/useChat';
 import { AuthProvider, useAuth } from './hooks/useAuth';
-import { PermissionMode } from './types';
 
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -84,11 +83,8 @@ function AppContent() {
     isLoading,
     inputValue,
     setInputValue,
-    permissionRequest,
     sendMessage,
     handleStop,
-    handlePermissionAllow,
-    handlePermissionDeny,
   } = useChat({
     currentSession,
     currentSessionId,
@@ -165,9 +161,6 @@ function AppContent() {
 
   // Sidebar 状态
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  
-  // 权限模式状态
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
 
   return (
     <div 
@@ -227,15 +220,10 @@ function AppContent() {
             agents={agents}
             isLoading={isLoading}
             inputValue={inputValue}
-            permissionRequest={permissionRequest}
-            permissionMode={permissionMode}
             onSendMessage={sendMessage}
             onStop={handleStop}
             onInputChange={setInputValue}
             onModelChange={updateCurrentSessionModel}
-            onPermissionAllow={handlePermissionAllow}
-            onPermissionDeny={handlePermissionDeny}
-            onPermissionModeChange={setPermissionMode}
           />
         )}
       </main>

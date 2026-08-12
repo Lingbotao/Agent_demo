@@ -1,7 +1,6 @@
 /**
  * 统一 LLM Provider 抽象层
  * 支持多种 LLM 后端，通过环境变量自动切换：
- *   - CodeBuddy SDK (CODEBUDDY_API_KEY)
  *   - MiniMax API (MINIMAX_API_KEY)
  *   - 任意 OpenAI 兼容 API (OPENAI_API_KEY + OPENAI_BASE_URL)
  */
@@ -27,62 +26,6 @@ interface LLMResponse {
 interface LLMProvider {
   name: string;
   chat(options: LLMChatOptions): Promise<LLMResponse>;
-}
-
-// ============== CodeBuddy SDK Provider ==============
-
-let codeBuddyQuery: any = null;
-
-async function getCodeBuddyQuery() {
-  if (codeBuddyQuery) return codeBuddyQuery;
-  try {
-    const sdk = await import('@tencent-ai/agent-sdk');
-    codeBuddyQuery = sdk.query;
-    return codeBuddyQuery;
-  } catch {
-    return null;
-  }
-}
-
-class CodeBuddyProvider implements LLMProvider {
-  name = 'CodeBuddy';
-
-  async chat(options: LLMChatOptions): Promise<LLMResponse> {
-    const queryFn = await getCodeBuddyQuery();
-    if (!queryFn) {
-      throw new Error('CodeBuddy SDK 不可用，请安装 @tencent-ai/agent-sdk');
-    }
-
-    const stream = queryFn({
-      prompt: options.prompt,
-      options: {
-        model: options.model || 'claude-sonnet-4',
-        maxTurns: 5,
-        systemPrompt: options.systemPrompt || '你是一个专业的智能客服助手。',
-        permissionMode: 'default',
-      },
-    });
-
-    let fullResponse = '';
-    for await (const msg of stream) {
-      if (msg.type === 'assistant') {
-        const content = msg.message.content;
-        if (typeof content === 'string') {
-          fullResponse += content;
-          options.onText?.(content);
-        } else if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block.type === 'text') {
-              fullResponse += block.text;
-              options.onText?.(block.text);
-            }
-          }
-        }
-      }
-    }
-
-    return { content: fullResponse, model: options.model || 'claude-sonnet-4' };
-  }
 }
 
 // ============== OpenAI 兼容 API Provider ==============
@@ -205,38 +148,27 @@ let cachedProvider: LLMProvider | null = null;
 
 /**
  * 自动检测可用的 LLM Provider
- * 优先级: CodeBuddy > MiniMax > OpenAI 兼容 > 默认兜底
+ * 优先级: MiniMax > OpenAI 兼容 > 默认兜底
  */
 export async function getLLMProvider(): Promise<LLMProvider> {
   if (cachedProvider) return cachedProvider;
 
-  const codeBuddyKey = process.env.CODEBUDDY_API_KEY;
   const minimaxKey = process.env.MINIMAX_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
 
-  // 1. CodeBuddy SDK
-  if (codeBuddyKey) {
-    const sdkAvailable = await getCodeBuddyQuery();
-    if (sdkAvailable) {
-      console.log('[LLM] 使用 CodeBuddy SDK Provider');
-      cachedProvider = new CodeBuddyProvider();
-      return cachedProvider;
-    }
-  }
-
-  // 2. MiniMax API
+  // 1. MiniMax API
   if (minimaxKey) {
     console.log('[LLM] 使用 MiniMax API Provider');
     cachedProvider = new OpenAICompatibleProvider({
       apiKey: minimaxKey,
       baseUrl: process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat/v1',
-      defaultModel: process.env.MINIMAX_MODEL || 'MiniMax-M1',
+      defaultModel: process.env.MINIMAX_MODEL || 'cs-agent',
       name: 'MiniMax',
     });
     return cachedProvider;
   }
 
-  // 3. 通用 OpenAI 兼容 API
+  // 2. 通用 OpenAI 兼容 API
   if (openaiKey) {
     console.log('[LLM] 使用 OpenAI 兼容 API Provider');
     cachedProvider = new OpenAICompatibleProvider({
@@ -248,7 +180,7 @@ export async function getLLMProvider(): Promise<LLMProvider> {
     return cachedProvider;
   }
 
-  // 4. 兜底：假 Provider（开发/演示用）
+  // 3. 兜底：假 Provider（开发/演示用）
   console.warn('[LLM] ⚠️ 未配置任何 API Key，使用模拟回复模式');
   cachedProvider = createFallbackProvider();
   return cachedProvider;
@@ -266,8 +198,7 @@ function createFallbackProvider(): LLMProvider {
 关于「${options.prompt.slice(0, 30)}」的问题：
 
 1. 您可以设置 MINIMAX_API_KEY 环境变量来启用 MiniMax
-2. 或设置 CODEBUDDY_API_KEY 来使用 CodeBuddy SDK
-3. 也支持任何 OpenAI 兼容的 API（OPENAI_API_KEY + OPENAI_BASE_URL）
+2. 也支持任何 OpenAI 兼容的 API（OPENAI_API_KEY + OPENAI_BASE_URL）
 
 如需转人工服务，请回复"转人工"。`;
 
