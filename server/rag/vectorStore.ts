@@ -1,197 +1,176 @@
 /**
- * 向量存储模块
- * 使用内存向量存储实现轻量级 RAG（无需额外安装向量数据库）
- * 基于余弦相似度的简单向量检索
+ * 向量存储模块 (LangChain Embedding + 轻量内存存储)
+ *
+ * Embedding: LangChain OpenAIEmbeddings → MiniMax embo-01 或 OpenAI text-embedding-3
+ * 存储:     内存向量数组 + 余弦相似度检索
+ *
+ * 用 LangChain 的 Embedding 层替换了 TF-IDF，语义匹配能力质的飞跃。
  */
 
-import * as db from '../db.js';
-import type { FaqKnowledge } from '../db.js';
+import { OpenAIEmbeddings } from "@langchain/openai";
+import { Document } from "@langchain/core/documents";
+import * as db from "../db.js";
+import type { FaqKnowledge } from "../db.js";
 
-/** 向量条目 */
+// ---- LangChain Embeddings 实例 ----
+
+function createEmbeddings(): OpenAIEmbeddings {
+  const apiKey = process.env.MINIMAX_API_KEY || process.env.OPENAI_API_KEY || "";
+  const baseURL =
+    process.env.MINIMAX_BASE_URL ||
+    process.env.OPENAI_BASE_URL ||
+    "https://api.openai.com/v1";
+  const model =
+    process.env.MINIMAX_EMBEDDING_MODEL || process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+
+  return new OpenAIEmbeddings({
+    apiKey,
+    configuration: { baseURL, timeout: 15000 },
+    model,
+    maxRetries: 1,
+    maxConcurrency: 5,
+  });
+}
+
+// ---- 向量条目 ----
+
 interface VectorEntry {
   id: string;
   question: string;
-  embedding: number[];
+  vector: number[];
   category: string;
 }
 
-/** 简单的 TF-IDF 向量化（轻量级替代方案） */
-class SimpleEmbedder {
-  private vocabulary: Map<string, number> = new Map();
-  private idfScores: Map<string, number> = new Map();
-  private totalDocs = 0;
-  private initialized = false;
+// ---- 余弦相似度 ----
 
-  /** 分词 */
-  tokenize(text: string): string[] {
-    // 中文和英文混合分词
-    return text
-      .toLowerCase()
-      .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, ' ')
-      .split(/\s+/)
-      .filter(t => t.length > 0);
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
   }
-
-  /** 初始化词表和 IDF */
-  initialize(documents: FaqKnowledge[]): void {
-    const docFreq = new Map<string, number>();
-    this.totalDocs = documents.length;
-
-    for (const doc of documents) {
-      const tokens = new Set(this.tokenize(doc.question + ' ' + (doc.keywords || '')));
-      for (const token of tokens) {
-        docFreq.set(token, (docFreq.get(token) || 0) + 1);
-      }
-    }
-
-    // 构建词表
-    let idx = 0;
-    for (const [token, df] of docFreq) {
-      this.vocabulary.set(token, idx);
-      // IDF = log(总文档数 / 包含该词的文档数)
-      this.idfScores.set(token, Math.log((this.totalDocs + 1) / (df + 1)) + 1);
-      idx++;
-    }
-
-    this.initialized = true;
-    console.log(`[Embedder] 词表大小: ${this.vocabulary.size}, 文档数: ${this.totalDocs}`);
-  }
-
-  /** 将文本转为 TF-IDF 向量 */
-  embed(text: string): number[] {
-    const tokens = this.tokenize(text);
-    const vector = new Array(this.vocabulary.size).fill(0);
-    
-    if (tokens.length === 0) return vector;
-
-    // 计算 TF
-    const tf = new Map<string, number>();
-    for (const token of tokens) {
-      tf.set(token, (tf.get(token) || 0) + 1);
-    }
-
-    // TF-IDF
-    for (const [token, freq] of tf) {
-      const idx = this.vocabulary.get(token);
-      if (idx !== undefined) {
-        const tfScore = freq / tokens.length;
-        const idfScore = this.idfScores.get(token) || 1;
-        vector[idx] = tfScore * idfScore;
-      }
-    }
-
-    return vector;
-  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-/** 内存向量存储 */
-class InMemoryVectorStore {
+// ---- LangChain 向量存储封装 ----
+
+class LangChainVectorStore {
   private entries: VectorEntry[] = [];
-  private embedder: SimpleEmbedder;
+  private embeddings: OpenAIEmbeddings;
+  private ready = false;
 
   constructor() {
-    this.embedder = new SimpleEmbedder();
-    this.reload();
+    this.embeddings = createEmbeddings();
   }
 
-  /** 从数据库重新加载所有 FAQ */
-  reload(): void {
+  /** 从数据库全量重建（生成 embedding 并建索引） */
+  async reload(): Promise<void> {
     const faqList = db.getAllFaq();
-    this.embedder.initialize(faqList);
-    
-    this.entries = faqList.map(faq => ({
-      id: faq.id,
-      question: faq.question,
-      embedding: this.embedder.embed(faq.question + ' ' + (faq.keywords || '')),
-      category: faq.category,
-    }));
-
-    console.log(`[VectorStore] 已加载 ${this.entries.length} 条 FAQ`);
-  }
-
-  /** 余弦相似度 */
-  private cosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length || a.length === 0) return 0;
-    
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-    
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
+    if (faqList.length === 0) {
+      this.entries = [];
+      this.ready = true;
+      console.log("[VectorStore] 知识库为空，跳过建索引");
+      return;
     }
-    
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+
+    try {
+      // 批量生成 embedding
+      const texts = faqList.map(f => `${f.question}\n${f.keywords || ""}`);
+      const vectors = await this.embeddings.embedDocuments(texts);
+
+      this.entries = faqList.map((faq, i) => ({
+        id: faq.id,
+        question: faq.question,
+        vector: vectors[i],
+        category: faq.category,
+      }));
+      this.ready = true;
+
+      console.log(
+        `[VectorStore] 已加载 ${this.entries.length} 条 FAQ ` +
+        `(Embedding: ${this.embeddings.model}, 维度: ${vectors[0]?.length || 0})`
+      );
+    } catch (error: any) {
+      console.error(`[VectorStore] Embedding API 不可用 (${error.message?.slice(0, 80)})`);
+      // 降级：标记为 ready，后续 search 会直接返回空（不阻塞服务器启动）
+      this.entries = [];
+      this.ready = true;
+    }
   }
 
-  /** 关键词加分 */
-  private keywordBonus(question: string, query: string): number {
-    const queryTokens = new Set(this.embedder.tokenize(query));
-    const questionTokens = this.embedder.tokenize(question);
-    const matchCount = questionTokens.filter(t => queryTokens.has(t)).length;
-    return queryTokens.size > 0 ? matchCount / queryTokens.size * 0.2 : 0;
+  async ensureInit(): Promise<void> {
+    if (!this.ready) await this.reload();
   }
 
   /**
-   * 搜索最匹配的 FAQ
-   * @param query 用户查询
-   * @param category 可选的意图类别过滤
-   * @param topK 返回结果数量
-   * @param minScore 最小相似度阈值
+   * 语义搜索
    */
-  search(
+  async search(
     query: string,
     category?: string,
     topK: number = 3,
-    minScore: number = 0.3
-  ): Array<{ id: string; question: string; score: number; category: string }> {
-    const queryVector = this.embedder.embed(query);
-    
-    // 计算相似度
-    const scored = this.entries
-      .filter(e => !category || e.category === category)
-      .map(e => {
-        const cosineScore = this.cosineSimilarity(queryVector, e.embedding);
-        const bonus = this.keywordBonus(e.question, query);
-        return {
+    minScore: number = 0.3,
+  ): Promise<Array<{ id: string; question: string; score: number; category: string }>> {
+    await this.ensureInit();
+    if (this.entries.length === 0) return [];
+
+    try {
+      // 生成查询向量
+      const queryVec = await this.embeddings.embedQuery(query);
+
+      // 余弦相似度排序
+      return this.entries
+        .filter(e => !category || e.category === category)
+        .map(e => ({
           id: e.id,
           question: e.question,
-          score: Math.min(cosineScore + bonus, 1.0),
+          score: cosineSimilarity(queryVec, e.vector),
           category: e.category,
-        };
-      })
-      .filter(r => r.score >= minScore)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, topK);
-
-    return scored;
+        }))
+        .filter(r => r.score >= minScore)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topK);
+    } catch (error: any) {
+      console.error(`[VectorStore] 检索失败: ${error.message?.slice(0, 80)}`);
+      return [];
+    }
   }
 
-  /** 添加单条向量 */
-  addEntry(faq: FaqKnowledge): void {
-    this.entries.push({
-      id: faq.id,
-      question: faq.question,
-      embedding: this.embedder.embed(faq.question + ' ' + (faq.keywords || '')),
-      category: faq.category,
-    });
+  /** 添加单条 FAQ */
+  async addEntry(faq: FaqKnowledge): Promise<void> {
+    await this.ensureInit();
+    try {
+      const [vec] = await this.embeddings.embedDocuments([
+        `${faq.question}\n${faq.keywords || ""}`,
+      ]);
+      this.entries.push({
+        id: faq.id,
+        question: faq.question,
+        vector: vec,
+        category: faq.category,
+      });
+    } catch (error: any) {
+      console.error(`[VectorStore] 添加条目失败: ${error.message?.slice(0, 80)}`);
+    }
   }
 
-  /** 删除单条向量 */
-  removeEntry(id: string): void {
+  /** 删除指定 ID */
+  async removeEntry(id: string): Promise<void> {
+    await this.ensureInit();
     this.entries = this.entries.filter(e => e.id !== id);
   }
 }
 
-// 全局单例
-let storeInstance: InMemoryVectorStore | null = null;
+// ---- 全局单例 ----
 
-export function getVectorStore(): InMemoryVectorStore {
+let storeInstance: LangChainVectorStore | null = null;
+
+export function getVectorStore(): LangChainVectorStore {
   if (!storeInstance) {
-    storeInstance = new InMemoryVectorStore();
+    storeInstance = new LangChainVectorStore();
   }
   return storeInstance;
 }
@@ -200,6 +179,6 @@ export function reloadVectorStore(): void {
   if (storeInstance) {
     storeInstance.reload();
   } else {
-    storeInstance = new InMemoryVectorStore();
+    storeInstance = new LangChainVectorStore();
   }
 }

@@ -107,12 +107,12 @@ const DEFAULT_FAQS: Array<{
 ];
 
 /** 初始化 FAQ 知识库（仅在表为空时） */
-export function initializeFaqKnowledge(): { loaded: number; total: number } {
+export async function initializeFaqKnowledge(): Promise<{ loaded: number; total: number }> {
   const existingCount = db.getFaqCount();
   
   if (existingCount > 0) {
     console.log(`[FAQ] 知识库已存在 ${existingCount} 条数据，跳过初始化`);
-    getVectorStore().reload();
+    await getVectorStore().reload();
     return { loaded: 0, total: existingCount };
   }
 
@@ -134,25 +134,25 @@ export function initializeFaqKnowledge(): { loaded: number; total: number } {
     }
   }
 
-  // 重新加载向量存储
-  getVectorStore().reload();
+  // 重新加载向量存储（生成 embedding 并建索引）
+  await getVectorStore().reload();
 
   console.log(`[FAQ] 初始化完成，加载 ${loaded}/${DEFAULT_FAQS.length} 条数据`);
   return { loaded, total: DEFAULT_FAQS.length };
 }
 
 /** 向知识库添加单条 FAQ */
-export function addFaq(question: string, answer: string, category: string, keywords?: string): db.FaqKnowledge {
+export async function addFaq(question: string, answer: string, category: string, keywords?: string): Promise<db.FaqKnowledge> {
   const faq = db.createFaq({ question, answer, category, keywords: keywords ?? null });
-  getVectorStore().addEntry(faq);
+  await getVectorStore().addEntry(faq);
   return faq;
 }
 
 /** 从知识库删除 FAQ */
-export function removeFaq(id: string): boolean {
+export async function removeFaq(id: string): Promise<boolean> {
   const success = db.deleteFaq(id);
   if (success) {
-    getVectorStore().removeEntry(id);
+    await getVectorStore().removeEntry(id);
   }
   return success;
 }

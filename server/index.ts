@@ -608,7 +608,7 @@ app.use("/api/admin", requireAuth, requireRole('admin'), adminRoutes);
 // 启动服务器
 bootstrapDefaultAdmin()
   .catch((err) => console.error('[Auth] 引导管理员失败:', err))
-  .finally(() => {
+  .finally(async () => {
     app.listen(PORT, () => {
       console.log(`
 ╔════════════════════════════════════════════╗
@@ -622,17 +622,17 @@ bootstrapDefaultAdmin()
 ║                                            ║
 ╚════════════════════════════════════════════╝
       `);
-
-      // 初始化 FAQ 知识库
-      try {
-        const faqResult = initializeFaqKnowledge();
-        if (faqResult.loaded > 0) {
-          console.log(`[Init] FAQ 知识库已初始化: ${faqResult.loaded} 条`);
-        } else {
-          console.log(`[Init] FAQ 知识库已有 ${faqResult.total} 条数据`);
-        }
-      } catch (error: any) {
-        console.error('[Init] FAQ 初始化失败:', error.message);
-      }
     });
+
+    // 初始化 FAQ 知识库（在 .finally 顶层作用域中 await，不嵌在 listen 回调里）
+    try {
+      const faqResult = await initializeFaqKnowledge();
+      if (faqResult.loaded > 0) {
+        console.log(`[Init] FAQ 知识库已初始化: ${faqResult.loaded} 条`);
+      } else {
+        console.log(`[Init] FAQ 知识库已有 ${faqResult.total} 条数据`);
+      }
+    } catch (error: any) {
+      console.error('[Init] FAQ 初始化失败:', error.message);
+    }
   });

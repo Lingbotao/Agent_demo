@@ -20,7 +20,7 @@ export async function ragNode(state: CSAgentState): Promise<Partial<CSAgentState
     const vectorStore = getVectorStore();
 
     // 按意图类别过滤搜索
-    const vectorResults = vectorStore.search(
+    const vectorResults = await vectorStore.search(
       userInput,
       intent && intent !== 'general' ? intent : undefined,
       3,

@@ -1,131 +1,130 @@
 /**
  * 智能客服 LangGraph 工作流引擎
- * 
- * 实现类 LangGraph 的状态图模式:
- *   Intent → RAG Search → Route → [FAQ Answer | Agent | Escalation]
- * 
- * 工作流说明:
- * 1. classifyIntent: 识别用户意图（退款/查单/技术支持/通用）
- * 2. searchFAQ: 在向量知识库中检索匹配的 FAQ
- * 3. routeAfterRag: 判断 FAQ 匹配度是否足够直接返回
- *    - 高匹配 → 直接返回 FAQ 答案
- *    - 低匹配/无匹配 → 进入 Agent 对话
- * 4. agentRespond: 调用统一 LLM Provider 进行智能对话
- * 5. routeAfterAgent: 判断 Agent 回答是否需要转人工
- *    - 正常回答 → 返回给用户
- *    - 无法解决 → 进入转人工
- * 6. escalateToHuman: 创建工单，转人工
+ *
+ * 使用 @langchain/langgraph 的 StateGraph 定义工作流：
+ *   intent → rag → route → [faq_answer | agent → route → (escalation | END)]
+ *
+ * 工作流节点:
+ * 1. intent:      识别用户意图（退款/查单/技术支持/通用）
+ * 2. rag:         在向量知识库中检索匹配 FAQ
+ * 3. faq_answer:  高匹配 → 直接返回 FAQ 答案
+ * 4. agent:       低匹配 → 调用 LLM 对话
+ * 5. escalation:  无法解决 → 创建工单转人工
  */
 
-import { classifyIntent } from './intent.js';
-import { ragNode, shouldUseFaqAnswer, getFaqResponse } from './rag.js';
-import { agentNode } from './agent.js';
-import { escalationNode } from './escalation.js';
-import type { CSAgentState, ChatMessage } from './types.js';
-import { createInitialState } from './types.js';
+import { StateGraph, START, END } from "@langchain/langgraph";
+import { classifyIntent } from "./intent.js";
+import { ragNode, shouldUseFaqAnswer, getFaqResponse } from "./rag.js";
+import { agentNode } from "./agent.js";
+import { escalationNode } from "./escalation.js";
+import type { CSAgentState, ChatMessage } from "./types.js";
+import { createInitialState } from "./types.js";
 
-/** 工作流节点类型 */
-type NodeFunc = (state: CSAgentState, onText?: (text: string) => void) => Promise<Partial<CSAgentState>>;
-type RouteFunc = (state: CSAgentState) => string;
-
-/** 工作流步骤定义 */
-interface WorkflowStep {
-  name: string;
-  node: NodeFunc;
-  /** 路由函数：根据状态决定下一个节点，null 表示终止 */
-  route?: RouteFunc;
-  /** 如果路由匹配此值，则执行对应节点 */
-  routes?: Record<string, string>;
+// ---- 流式文本回调（模块级，节点通过它向外输出流式文本） ----
+let onTextCallback: ((text: string) => void) | null = null;
+export function setOnTextCallback(cb: ((text: string) => void) | null) {
+  onTextCallback = cb;
 }
 
-/**
- * 智能客服工作流
- * 按序执行节点，每个节点可以决定下一个执行节点
- */
-export class CSAgentWorkflow {
-  private steps: WorkflowStep[];
+// ---- LangGraph 节点函数 ----
+// 每个节点接收 state，返回 Partial<CSAgentState> 更新
 
-  constructor() {
-    // 定义工作流
-    this.steps = [
-      {
-        name: 'intent',
-        node: this.wrapIntent,
-      },
-      {
-        name: 'rag',
-        node: ragNode,
-        route: (state: CSAgentState) => {
-          // RAG 之后判断: FAQ 匹配度高 → faq_answer, 否则 → agent
-          if (state.error) return 'escalation';
-          return shouldUseFaqAnswer(state) ? 'faq_answer' : 'agent';
-        },
-        routes: {
-          faq_answer: 'faq_answer',
-          agent: 'agent',
-          escalation: 'escalation',
-        },
-      },
-      {
-        name: 'faq_answer',
-        node: this.wrapFaqAnswer,
-        // FAQ 回答后直接结束
-      },
-      {
-        name: 'agent',
-        node: this.wrapAgent,
-        route: (state: CSAgentState) => {
-          // Agent 回答后判断: 需要转人工 → escalation, 否则结束
-          return state.shouldEscalate ? 'escalation' : 'done';
-        },
-        routes: {
-          escalation: 'escalation',
-          done: 'done',
-        },
-      },
-      {
-        name: 'escalation',
-        node: escalationNode,
-        // 转人工后结束
-      },
-    ];
+async function intentNode(state: CSAgentState): Promise<Partial<CSAgentState>> {
+  const { intent, confidence } = classifyIntent(state.userInput);
+  console.log(`[LangGraph: intent] ${intent} (${confidence.toFixed(2)})`);
+  return { intent, intentConfidence: confidence };
+}
+
+async function ragSearchNode(state: CSAgentState): Promise<Partial<CSAgentState>> {
+  return ragNode(state);
+}
+
+async function faqAnswerNode(state: CSAgentState): Promise<Partial<CSAgentState>> {
+  const result = getFaqResponse(state);
+  if (result.finalResponse && onTextCallback) {
+    onTextCallback(result.finalResponse);
   }
+  return result;
+}
 
-  /** 封装意图识别 */
-  private async wrapIntent(state: CSAgentState, _onText?: (text: string) => void): Promise<Partial<CSAgentState>> {
-    const { intent, confidence } = classifyIntent(state.userInput);
-    return { intent, intentConfidence: confidence };
-  }
+async function llmAgentNode(state: CSAgentState): Promise<Partial<CSAgentState>> {
+  return agentNode(state, onTextCallback ?? undefined);
+}
 
-  /** 封装 FAQ 回答 */
-  private async wrapFaqAnswer(state: CSAgentState, onText?: (text: string) => void): Promise<Partial<CSAgentState>> {
-    const result = getFaqResponse(state);
-    if (result.finalResponse) {
-      onText?.(result.finalResponse);
-    }
-    return result;
-  }
+async function humanEscalationNode(state: CSAgentState): Promise<Partial<CSAgentState>> {
+  return escalationNode(state);
+}
 
-  /** 封装 Agent 调用 */
-  private async wrapAgent(state: CSAgentState, onText?: (text: string) => void): Promise<Partial<CSAgentState>> {
-    return agentNode(state, onText);
-  }
+// ---- 条件路由函数 ----
+// 返回下一个节点名称，或 END 终止
 
+function routeAfterRag(state: CSAgentState): string {
+  if (state.error) return "escalation";
+  return shouldUseFaqAnswer(state) ? "faq_answer" : "agent";
+}
+
+function routeAfterAgent(state: CSAgentState): string {
+  return state.shouldEscalate ? "escalation" : END;
+}
+
+// ---- 编译 LangGraph 状态图 ----
+
+function buildGraph() {
+  const graph = new StateGraph<CSAgentState>({
+    channels: {
+      messages: { reducer: (x: ChatMessage[], y: ChatMessage[]) => y, default: () => [] },
+      userInput: { reducer: (_, y) => y, default: () => "" },
+      sessionId: { reducer: (_, y) => y, default: () => "" },
+      messageId: { reducer: (_, y) => y, default: () => "" },
+      intent: { reducer: (_, y) => y, default: () => null },
+      intentConfidence: { reducer: (_, y) => y, default: () => 0 },
+      faqResults: { reducer: (_, y) => y, default: () => [] },
+      shouldEscalate: { reducer: (_, y) => y, default: () => false },
+      ticketId: { reducer: (_, y) => y, default: () => null },
+      finalResponse: { reducer: (_, y) => y, default: () => null },
+      usedFaq: { reducer: (_, y) => y, default: () => false },
+      usedFaqId: { reducer: (_, y) => y, default: () => null },
+      error: { reducer: (_, y) => y, default: () => null },
+    },
+  });
+
+  graph
+    .addNode("detect_intent", intentNode)
+    .addNode("search_faq", ragSearchNode)
+    .addNode("reply_faq", faqAnswerNode)
+    .addNode("call_agent", llmAgentNode)
+    .addNode("create_ticket", humanEscalationNode)
+    .addEdge(START, "detect_intent")
+    .addEdge("detect_intent", "search_faq")
+    .addConditionalEdges("search_faq", routeAfterRag, {
+      faq_answer: "reply_faq",
+      agent: "call_agent",
+      escalation: "create_ticket",
+    })
+    .addEdge("reply_faq", END)
+    .addConditionalEdges("call_agent", routeAfterAgent, {
+      escalation: "create_ticket",
+      [END]: END,
+    })
+    .addEdge("create_ticket", END);
+
+  return graph.compile();
+}
+
+// ---- 封装类：对外保持兼容 API ----
+
+let compiledGraph = buildGraph();
+
+export class LangGraphWorkflow {
   /**
    * 执行完整工作流
-   * @param userInput 用户输入
-   * @param sessionId 会话 ID
-   * @param messageId 消息 ID
-   * @param onText 流式文本回调
-   * @param history 历史对话（按时间顺序）
-   * @returns 最终状态
    */
   async run(
     userInput: string,
     sessionId: string,
     messageId: string,
     onText?: (text: string) => void,
-    history?: ChatMessage[]
+    history?: ChatMessage[],
   ): Promise<CSAgentState> {
     const initialState = createInitialState({
       userInput,
@@ -134,56 +133,21 @@ export class CSAgentWorkflow {
       messages: history || [],
     });
 
-    console.log(`\n[Workflow] ===== 开始执行 =====`);
-    console.log(`[Workflow] Session: ${sessionId}, Input: "${userInput.slice(0, 80)}"`);
+    console.log(`\n[LangGraph] ===== 开始执行 =====`);
+    console.log(`[LangGraph] Session: ${sessionId}, Input: "${userInput.slice(0, 80)}"`);
 
-    // 合并 state
-    let state: CSAgentState = { ...initialState };
+    // 设置流式回调
+    setOnTextCallback(onText || null);
 
-    // 按序执行节点
-    // 执行顺序: intent → rag → route → (faq_answer | agent) → (escalation)
-    const executionOrder = ['intent', 'rag'];
-
-    for (const stepName of executionOrder) {
-      const step = this.steps.find(s => s.name === stepName);
-      if (!step) continue;
-
-      console.log(`[Workflow] 执行节点: ${step.name}`);
-      const partial = await step.node(state, onText);
-      state = { ...state, ...partial };
+    try {
+      const result = (await compiledGraph.invoke(initialState)) as CSAgentState;
+      console.log(
+        `[LangGraph] 结束, intent=${result.intent}, usedFaq=${result.usedFaq}, escalated=${result.shouldEscalate}`,
+      );
+      return result;
+    } finally {
+      setOnTextCallback(null);
     }
-
-    // 根据 RAG 结果路由
-    const ragStep = this.steps.find(s => s.name === 'rag')!;
-    const nextNode = ragStep.route?.(state) || 'done';
-    console.log(`[Workflow] 路由: rag → ${nextNode}`);
-
-    if (nextNode === 'faq_answer' || nextNode === 'agent' || nextNode === 'escalation') {
-      const nextStep = this.steps.find(s => s.name === nextNode);
-      if (nextStep) {
-        console.log(`[Workflow] 执行节点: ${nextNode}`);
-        const partial = await nextStep.node(state, onText);
-        state = { ...state, ...partial };
-
-        // 如果是 agent，再路由一次
-        if (nextNode === 'agent') {
-          const agentStep = this.steps.find(s => s.name === 'agent')!;
-          const afterAgent = agentStep.route?.(state) || 'done';
-          console.log(`[Workflow] 路由: agent → ${afterAgent}`);
-
-          if (afterAgent === 'escalation') {
-            const escStep = this.steps.find(s => s.name === 'escalation');
-            if (escStep) {
-              const partial2 = await escStep.node(state, onText);
-              state = { ...state, ...partial2 };
-            }
-          }
-        }
-      }
-    }
-
-    console.log(`[Workflow] 结束, intent=${state.intent}, usedFaq=${state.usedFaq}, escalated=${state.shouldEscalate}`);
-    return state;
   }
 
   /**
@@ -192,14 +156,20 @@ export class CSAgentWorkflow {
   detectIntent(text: string): { intent: string; confidence: number } {
     return classifyIntent(text);
   }
+
+  /** 重新编译图（切换模型等场景可用） */
+  rebuild(): void {
+    compiledGraph = buildGraph();
+  }
 }
 
-// 全局单例
-let workflowInstance: CSAgentWorkflow | null = null;
+// ---- 全局单例 ----
 
-export function getWorkflow(): CSAgentWorkflow {
+let workflowInstance: LangGraphWorkflow | null = null;
+
+export function getWorkflow(): LangGraphWorkflow {
   if (!workflowInstance) {
-    workflowInstance = new CSAgentWorkflow();
+    workflowInstance = new LangGraphWorkflow();
   }
   return workflowInstance;
 }

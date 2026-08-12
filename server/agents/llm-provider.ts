@@ -1,9 +1,18 @@
 /**
  * 统一 LLM Provider 抽象层
- * 支持多种 LLM 后端，通过环境变量自动切换：
- *   - MiniMax API (MINIMAX_API_KEY)
- *   - 任意 OpenAI 兼容 API (OPENAI_API_KEY + OPENAI_BASE_URL)
+ * 使用 LangChain ChatOpenAI 替代手写 HTTP+SSE 调用。
+ * 支持：MiniMax / OpenAI 兼容 / 任意 OpenAI 格式 API
+ *
+ * 通过环境变量自动切换：
+ *   - MINIMAX_API_KEY → MiniMax
+ *   - OPENAI_API_KEY   → OpenAI 兼容
+ *   - 无 Key           → 演示兜底
  */
+
+import { ChatOpenAI } from "@langchain/openai";
+import { HumanMessage, SystemMessage, AIMessage } from "@langchain/core/messages";
+
+// ---- 对外接口（保持不变） ----
 
 interface LLMChatOptions {
   prompt: string;
@@ -22,134 +31,116 @@ interface LLMResponse {
   usage?: { promptTokens: number; completionTokens: number };
 }
 
-/** 抽象 LLM Provider */
 interface LLMProvider {
   name: string;
   chat(options: LLMChatOptions): Promise<LLMResponse>;
 }
 
-// ============== OpenAI 兼容 API Provider ==============
-// 适用于 MiniMax、DeepSeek、Qwen、SiliconFlow 等所有 OpenAI 兼容接口
+// ---- 消息格式转换 ----
 
-class OpenAICompatibleProvider implements LLMProvider {
+function buildMessages(options: LLMChatOptions) {
+  const msgs: (SystemMessage | HumanMessage | AIMessage)[] = [];
+
+  if (options.systemPrompt) {
+    msgs.push(new SystemMessage(options.systemPrompt));
+  }
+
+  if (options.history && options.history.length > 0) {
+    for (const h of options.history) {
+      if (!h?.role || !h?.content) continue;
+      if (h.role === 'system') msgs.push(new SystemMessage(h.content));
+      else if (h.role === 'assistant') msgs.push(new AIMessage(h.content));
+      else msgs.push(new HumanMessage(h.content));
+    }
+  }
+
+  msgs.push(new HumanMessage(options.prompt));
+  return msgs;
+}
+
+// ---- ChatOpenAI Provider ----
+
+class LangChainChatProvider implements LLMProvider {
   name: string;
-  private apiKey: string;
-  private baseUrl: string;
+  private llm: ChatOpenAI;
   private defaultModel: string;
 
-  constructor(config: { apiKey: string; baseUrl: string; defaultModel: string; name?: string }) {
-    this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl.replace(/\/$/, '');
+  constructor(config: { apiKey: string; baseURL: string; defaultModel: string; name?: string }) {
+    this.name = config.name || 'LangChain';
     this.defaultModel = config.defaultModel;
-    this.name = config.name || 'OpenAI Compatible';
+
+    this.llm = new ChatOpenAI({
+      apiKey: config.apiKey,
+      configuration: { baseURL: config.baseURL },
+      model: config.defaultModel,
+      temperature: 0.7,
+      maxTokens: 2048,
+    });
   }
 
   async chat(options: LLMChatOptions): Promise<LLMResponse> {
     const model = options.model || this.defaultModel;
-    const messages: Array<{ role: string; content: string }> = [];
 
-    if (options.systemPrompt) {
-      messages.push({ role: 'system', content: options.systemPrompt });
-    }
+    // 如果指定了不同模型，临时创建一个新实例
+    const llm =
+      model !== this.defaultModel
+        ? new ChatOpenAI({
+            apiKey: this.llm.clientConfig?.apiKey as string,
+            configuration: { baseURL: (this.llm as any).clientConfig?.baseURL },
+            model,
+            temperature: options.temperature ?? 0.7,
+            maxTokens: options.maxTokens ?? 2048,
+          })
+        : this.llm;
 
-    // 注入历史对话（按时间顺序），形成真正的多轮上下文
-    if (options.history && options.history.length > 0) {
-      for (const h of options.history) {
-        if (h && h.role && h.content) {
-          messages.push({ role: h.role, content: h.content });
+    const messages = buildMessages(options);
+
+    // 流式模式
+    if (options.onText) {
+      const stream = await llm.stream(messages);
+      let fullContent = '';
+
+      for await (const chunk of stream) {
+        const text = typeof chunk.content === 'string'
+          ? chunk.content
+          : Array.isArray(chunk.content)
+            ? chunk.content.map((b: any) => b.text || '').join('')
+            : '';
+
+        if (text) {
+          fullContent += text;
+          options.onText(text);
         }
       }
+
+      return { content: fullContent, model };
     }
 
-    messages.push({ role: 'user', content: options.prompt });
-
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        max_tokens: options.maxTokens || 2048,
-        temperature: options.temperature ?? 0.7,
-        stream: options.onText ? true : false,
-      }),
-    });
-
-    if (!response.ok) {
-      const errBody = await response.text();
-      throw new Error(`LLM API 错误 (${response.status}): ${errBody.slice(0, 200)}`);
-    }
-
-    // 流式处理
-    if (options.onText && response.body) {
-      return this.handleStream(response.body, model, options.onText);
-    }
-
-    // 非流式处理
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '';
+    // 非流式模式
+    const result = await llm.invoke(messages);
+    const content = typeof result.content === 'string'
+      ? result.content
+      : Array.isArray(result.content)
+        ? result.content.map((b: any) => b.text || '').join('')
+        : '';
 
     return {
       content,
       model,
-      usage: data.usage,
-    };
-  }
-
-  /** 处理 SSE 流式响应 */
-  private async handleStream(
-    body: ReadableStream<Uint8Array>,
-    model: string,
-    onText: (text: string) => void
-  ): Promise<LLMResponse> {
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let fullContent = '';
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data: ')) continue;
-        const dataStr = trimmed.slice(6);
-
-        if (dataStr === '[DONE]') continue;
-
-        try {
-          const data = JSON.parse(dataStr);
-          const delta = data.choices?.[0]?.delta?.content;
-          if (delta) {
-            fullContent += delta;
-            onText(delta);
+      usage: result.usage_metadata
+        ? {
+            promptTokens: (result.usage_metadata as any).input_tokens || 0,
+            completionTokens: (result.usage_metadata as any).output_tokens || 0,
           }
-        } catch {
-          // 跳过解析失败的行
-        }
-      }
-    }
-
-    return { content: fullContent, model };
+        : undefined,
+    };
   }
 }
 
-// ============== Provider 检测和创建 ==============
+// ---- Provider 检测和创建 ----
 
 let cachedProvider: LLMProvider | null = null;
 
-/**
- * 自动检测可用的 LLM Provider
- * 优先级: MiniMax > OpenAI 兼容 > 默认兜底
- */
 export async function getLLMProvider(): Promise<LLMProvider> {
   if (cachedProvider) return cachedProvider;
 
@@ -158,11 +149,11 @@ export async function getLLMProvider(): Promise<LLMProvider> {
 
   // 1. MiniMax API
   if (minimaxKey) {
-    console.log('[LLM] 使用 MiniMax API Provider');
-    cachedProvider = new OpenAICompatibleProvider({
+    console.log('[LLM] 使用 MiniMax API (LangChain ChatOpenAI)');
+    cachedProvider = new LangChainChatProvider({
       apiKey: minimaxKey,
-      baseUrl: process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat/v1',
-      defaultModel: process.env.MINIMAX_MODEL || 'cs-agent',
+      baseURL: process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat/v1',
+      defaultModel: process.env.MINIMAX_MODEL || 'MiniMax-M1',
       name: 'MiniMax',
     });
     return cachedProvider;
@@ -170,23 +161,22 @@ export async function getLLMProvider(): Promise<LLMProvider> {
 
   // 2. 通用 OpenAI 兼容 API
   if (openaiKey) {
-    console.log('[LLM] 使用 OpenAI 兼容 API Provider');
-    cachedProvider = new OpenAICompatibleProvider({
+    console.log('[LLM] 使用 OpenAI 兼容 API (LangChain ChatOpenAI)');
+    cachedProvider = new LangChainChatProvider({
       apiKey: openaiKey,
-      baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+      baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
       defaultModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       name: 'OpenAI Compatible',
     });
     return cachedProvider;
   }
 
-  // 3. 兜底：假 Provider（开发/演示用）
+  // 3. 兜底：假 Provider（演示模式）
   console.warn('[LLM] ⚠️ 未配置任何 API Key，使用模拟回复模式');
   cachedProvider = createFallbackProvider();
   return cachedProvider;
 }
 
-/** 无 API Key 时的兜底 Provider（返回预设回复） */
 function createFallbackProvider(): LLMProvider {
   return {
     name: 'Fallback',
@@ -208,7 +198,6 @@ function createFallbackProvider(): LLMProvider {
   };
 }
 
-/** 清除缓存的 Provider（切换配置后调用） */
 export function clearProviderCache(): void {
   cachedProvider = null;
 }
