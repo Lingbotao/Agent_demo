@@ -31,7 +31,6 @@ export function setOnTextCallback(cb: ((text: string) => void) | null) {
 
 async function intentNode(state: CSAgentState): Promise<Partial<CSAgentState>> {
   const { intent, confidence } = classifyIntent(state.userInput);
-  console.log(`[LangGraph: intent] ${intent} (${confidence.toFixed(2)})`);
   return { intent, intentConfidence: confidence };
 }
 
@@ -133,17 +132,11 @@ export class LangGraphWorkflow {
       messages: history || [],
     });
 
-    console.log(`\n[LangGraph] ===== 开始执行 =====`);
-    console.log(`[LangGraph] Session: ${sessionId}, Input: "${userInput.slice(0, 80)}"`);
-
     // 设置流式回调
     setOnTextCallback(onText || null);
 
     try {
-      const result = (await compiledGraph.invoke(initialState)) as CSAgentState;
-      console.log(
-        `[LangGraph] 结束, intent=${result.intent}, usedFaq=${result.usedFaq}, escalated=${result.shouldEscalate}`,
-      );
+      const result = (await compiledGraph.invoke(initialState as any)) as unknown as CSAgentState;
       return result;
     } finally {
       setOnTextCallback(null);

@@ -72,7 +72,6 @@ class LangChainVectorStore {
     if (faqList.length === 0) {
       this.entries = [];
       this.ready = true;
-      console.log("[VectorStore] 知识库为空，跳过建索引");
       return;
     }
 
@@ -88,11 +87,6 @@ class LangChainVectorStore {
         category: faq.category,
       }));
       this.ready = true;
-
-      console.log(
-        `[VectorStore] 已加载 ${this.entries.length} 条 FAQ ` +
-        `(Embedding: ${this.embeddings.model}, 维度: ${vectors[0]?.length || 0})`
-      );
     } catch (error: any) {
       console.error(`[VectorStore] Embedding API 不可用 (${error.message?.slice(0, 80)})`);
       // 降级：标记为 ready，后续 search 会直接返回空（不阻塞服务器启动）

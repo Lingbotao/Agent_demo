@@ -275,14 +275,7 @@ app.delete("/api/sessions/:sessionId", (req, res) => {
 app.post("/api/chat", requireAuth, async (req, res) => {
   const { sessionId, message, model, systemPrompt } = req.body;
 
-  // 请求日志
-  console.log(`\n[Chat] ========== 新请求 ==========`);
-  console.log(`[Chat] SessionId: ${sessionId}`);
-  console.log(`[Chat] Model: ${model}`);
-  console.log(`[Chat] Message: ${message?.slice(0, 100)}${message?.length > 100 ? '...' : ''}`);
-
   if (!message) {
-    console.log(`[Chat] 错误: 消息为空`);
     return res.status(400).json({ error: "消息不能为空" });
   }
 
@@ -291,8 +284,6 @@ app.post("/api/chat", requireAuth, async (req, res) => {
   const now = new Date().toISOString();
 
   if (!session) {
-    // 创建新会话
-    console.log(`[Chat] 创建新会话`);
     session = db.createSession({
       id: sessionId || uuidv4(),
       title: message.slice(0, 30) + (message.length > 30 ? '...' : ''),
@@ -300,8 +291,6 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       created_at: now,
       updated_at: now
     });
-  } else {
-    console.log(`[Chat] 使用现有会话`);
   }
 
   const selectedModel = model || session.model;
@@ -321,7 +310,6 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       created_at: now,
       tool_calls: null
     });
-    console.log(`[Chat] 用户消息已保存: ${userMessageId}`);
   } catch (dbError: any) {
     console.error(`[Chat] 保存用户消息失败:`, dbError);
     return res.status(500).json({ error: "保存消息失败", detail: dbError?.message });
@@ -336,8 +324,6 @@ app.post("/api/chat", requireAuth, async (req, res) => {
   const defaultSystemPrompt = "你是一个专业的AI助手，善于帮助用户解决各种问题。请用简洁清晰的方式回答问题。";
 
   try {
-    console.log(`[Chat] 调用 LLM Provider, Model: ${selectedModel}`);
-
     // 加载历史对话（剔除当前 user 消息），形成多轮上下文
     const HISTORY_LIMIT = 20;
     const dbHistory = db.getMessagesBySession(session.id);
@@ -351,7 +337,6 @@ app.post("/api/chat", requireAuth, async (req, res) => {
 
     // 通过统一 LLM Provider 调用
     const provider = await getLLMProvider();
-    console.log(`[Chat] Provider: ${provider.name}`);
 
     let fullResponse = '';
     let toolCalls: Array<{
@@ -407,13 +392,9 @@ app.post("/api/chat", requireAuth, async (req, res) => {
     }
 
     res.write(`data: ${JSON.stringify({ type: "done", duration })}\n\n`);
-    console.log(`[Chat] 请求完成 ✓`);
     res.end();
   } catch (error: any) {
-    console.error(`\n[Chat] ========== 错误 ==========`);
-    console.error(`[Chat] Error Name:`, error?.name);
-    console.error(`[Chat] Error Message:`, error?.message);
-    console.error(`[Chat] Error Stack:`, error?.stack);
+    console.error(`[Chat] LLM 调用失败:`, error?.message);
 
     const errorMessage = error?.message || "处理请求时发生错误";
     res.write(`data: ${JSON.stringify({ type: "error", message: errorMessage })}\n\n`);
@@ -461,9 +442,6 @@ app.get("/api/satisfaction/stats", (req, res) => {
 app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
   const { sessionId, message } = req.body;
 
-  console.log(`\n[CS-Agent] ===== 智能客服请求 =====`);
-  console.log(`[CS-Agent] Session: ${sessionId}, Message: "${message?.slice(0, 80)}"`);
-
   if (!message) {
     return res.status(400).json({ error: "消息不能为空" });
   }
@@ -510,7 +488,6 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
       role: (m.role === 'user' || m.role === 'assistant' || m.role === 'system') ? m.role : 'user',
       content: m.content || '',
     })) as Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
-  console.log(`[CS-Agent] 加载历史 ${historyMessages.length} 条`);
 
   // 设置 SSE
   res.setHeader("Content-Type", "text/event-stream");
@@ -555,7 +532,7 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
       historyMessages
     );
 
-    console.log(`[CS-Agent] 工作流结果: intent=${finalState.intent}, usedFaq=${finalState.usedFaq}, escalated=${finalState.shouldEscalate}`);
+    console.log(`[CS-Agent] 完成: intent=${finalState.intent}, faq=${finalState.usedFaq}, escalate=${finalState.shouldEscalate}`);
 
     // 如果有额外的工作流元数据，发送给前端
     res.write(`data: ${JSON.stringify({
@@ -593,7 +570,6 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
 
     res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
     res.end();
-    console.log(`[CS-Agent] 请求完成 ✓`);
   } catch (error: any) {
     console.error(`[CS-Agent] Error:`, error);
     res.write(`data: ${JSON.stringify({ type: "error", message: error?.message || "处理请求时发生错误" })}\n\n`);

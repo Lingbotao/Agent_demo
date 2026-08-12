@@ -82,9 +82,7 @@ export function classifyIntent(userInput: string): { intent: IntentType; confide
  */
 export async function intentNode(state: CSAgentState): Promise<Partial<CSAgentState>> {
   const { intent, confidence } = classifyIntent(state.userInput);
-  
-  console.log(`[Intent] 识别意图: ${INTENT_LABELS[intent]}, 置信度: ${confidence.toFixed(2)}`);
-  
+
   return {
     intent,
     intentConfidence: confidence,

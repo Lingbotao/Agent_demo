@@ -53,8 +53,6 @@ export async function agentNode(
 ): Promise<Partial<CSAgentState>> {
   const { userInput, intent, faqResults, messages } = state;
 
-  console.log(`[Agent] 调用 LLM Provider, 意图: ${intent}`);
-
   try {
     // 构建上下文变量
     const context = buildContext(intent, faqResults);
@@ -74,7 +72,6 @@ export async function agentNode(
 
     // 调用 LLM
     const provider = await getLLMProvider();
-    console.log(`[Agent] Provider: ${provider.name}`);
 
     const result = await provider.chat({
       prompt: "", // 由 messages 字段接管

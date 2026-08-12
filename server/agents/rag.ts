@@ -67,13 +67,7 @@ export function shouldUseFaqAnswer(state: CSAgentState): boolean {
   const askingForHuman = /转人工|人工客服|人工服务|找人工|客服人员/.test(state.userInput);
   
   if (isHighConfidence && !askingForHuman) {
-    console.log(`[RAG] 使用 FAQ 答案 (分数: ${bestMatch!.score.toFixed(2)})`);
     return true;
-  }
-
-  // 用户明确要求转人工
-  if (askingForHuman) {
-    console.log('[RAG] 用户要求转人工');
   }
 
   return false;
