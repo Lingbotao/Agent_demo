@@ -15,14 +15,14 @@
 
 ## 技术栈
 
-- **后端**: Node.js + Express + TypeScript
+- **后端**: Node.js + Express + TypeScript + LangGraph（状态图引擎）+ LangChain（ChatOpenAI / OpenAIEmbeddings）
 - **前端**: React 18 + TypeScript + Vite
 - **UI**: TDesign React 组件库 + Tailwind CSS
+- **图表**: ECharts（管理后台仪表盘）
 - **AI 编排**: LangGraph（CS Agent 工作流）
 - **AI 调用**: 统一 LLM Provider（OpenAI 兼容协议）
 - **数据库**: SQLite (better-sqlite3)
 - **鉴权**: JWT (jsonwebtoken) + bcryptjs
-- **日志**: Winston
 
 ## 快速开始
 
@@ -67,20 +67,24 @@ npm run dev
 ## 项目结构
 
 ```
-web-agent/
+Agent_demo/
 ├── server/                      # 后端服务
 │   ├── index.ts                # Express 服务器（API 路由）
-│   ├── db.ts                   # SQLite 数据库操作
+│   ├── db.ts                   # SQLite 数据库操作（7 张表）
 │   ├── auth.ts                 # JWT 鉴权
 │   ├── admin/                  # 管理后台路由
+│   │   └── routes.ts
 │   ├── agents/                 # LangGraph 工作流节点
 │   │   ├── graph.ts            # CS Agent 状态图
 │   │   ├── agent.ts            # 通用对话节点
 │   │   ├── intent.ts           # 意图识别
 │   │   ├── rag.ts              # FAQ 检索
 │   │   ├── escalation.ts       # 工单升级
+│   │   ├── types.ts            # 工作流状态定义
 │   │   └── llm-provider.ts     # 统一 LLM Provider 抽象层
 │   └── rag/                    # 知识库加载与向量检索
+│       ├── faqLoader.ts        # FAQ 初始化与种子数据
+│       └── vectorStore.ts      # Embedding API + 余弦相似度
 ├── src/                        # 前端源码
 │   ├── components/             # React 组件
 │   ├── hooks/                  # 自定义 Hooks
@@ -88,15 +92,20 @@ web-agent/
 │   ├── utils/                  # 工具函数
 │   ├── types.ts                # 类型定义
 │   ├── config.ts               # 应用配置
-│   └── App.tsx                 # 应用入口
+│   ├── App.tsx                 # 路由与全局状态
+│   └── main.tsx                # React 入口
 ├── data/                       # 数据存储
-│   └── chat.db                 # SQLite 数据库
+│   ├── chat.db                 # SQLite 数据库
+│   └── faq/                    # FAQ 知识库源文件目录
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts
 ├── README.md                   # 项目说明
 ├── DEVELOPMENT.md              # 二次开发指南
-└── ACCEPTANCE.md               # 验收清单
+├── DEVELOPMENT_PLAN.md         # 开发方案与历史
+├── ACCEPTANCE.md               # 验收清单
+├── RAG_LANDSCAPE.md            # RAG 方案调研与升级路径
+└── overview.md                 # 项目进度总览
 ```
 
 ## 核心功能
@@ -105,10 +114,10 @@ web-agent/
 
 `cs-agent` 是内置模型 ID，走 [server/agents/graph.ts](file:///Users/botao/Desktop/Agent_demo/server/agents/graph.ts) 定义的 LangGraph 工作流，节点顺序：
 
-1. `intent` - 意图识别（退款 / 订单查询 / 技术支持 / 投诉 / 一般问题等）
-2. `rag` - FAQ 知识库检索（基于内存 TF-IDF 向量匹配）
+1. `intent` - 意图识别（`refund` 退款 / `order_inquiry` 订单查询 / `tech_support` 技术支持 / `general` 通用）
+2. `rag` - FAQ 知识库检索（Embedding API 向量化 + 余弦相似度）
 3. `agent` - 通用 LLM 回复（无匹配 FAQ 时）
-4. `escalation` - 工单升级（投诉类或低置信度时自动创建工单）
+4. `escalation` - 工单升级（用户明确要求转人工或 LLM 兜底时触发）
 
 SSE 流事件：
 - `intent` - 意图 + 置信度
@@ -137,13 +146,14 @@ SSE 流事件：
 
 ### 数据持久化
 
-使用 SQLite 存储：
-- 会话信息（标题、模型、Agent 绑定）
-- 消息历史（含工具调用快照）
-- FAQ 知识库
-- 工单记录（含升级流转状态）
-- 意图识别记录
-- 满意度评分
+使用 SQLite 存储（7 张表）：
+- `sessions` - 会话信息（标题、模型、Agent 绑定）
+- `messages` - 消息历史（角色、内容、模型、时间戳）
+- `faq_knowledge` - FAQ 知识库（问题、答案、分类、关键词）
+- `tickets` - 工单记录（状态、优先级、升级流转）
+- `conversation_intents` - 意图识别记录（意图、置信度、FAQ 命中）
+- `satisfaction_ratings` - 满意度评分（1-5 星 + 评语）
+- `users` - 用户认证（bcrypt 密码哈希 + RBAC 角色）
 
 ## API 端点
 
@@ -155,18 +165,25 @@ SSE 流事件：
 | `/api/models` | GET | 获取可用模型列表 |
 | `/api/sessions` | GET | 获取所有会话 |
 | `/api/sessions` | POST | 创建新会话 |
-| `/api/sessions/:id` | GET | 获取单个会话 |
-| `/api/sessions/:id` | PATCH | 更新会话 |
+| `/api/sessions/:id` | GET | 获取单个会话（含消息） |
+| `/api/sessions/:id` | PATCH | 更新会话（标题/模型） |
 | `/api/sessions/:id` | DELETE | 删除会话 |
 | `/api/chat` | POST | 通用对话（SSE 流式响应） |
 | `/api/cs-agent/chat` | POST | 智能客服 Agent（SSE 流式响应） |
+| `/api/satisfaction` | POST | 提交满意度评分 |
 | `/api/admin/dashboard` | GET | 管理员仪表盘统计 |
-| `/api/admin/sessions` | GET | 全部会话（管理员） |
-| `/api/admin/satisfaction` | GET | 满意度评分（管理员） |
+| `/api/admin/conversations` | GET | 全部会话（管理员） |
+| `/api/admin/conversations/:sessionId` | GET | 单个会话详情（管理员） |
+| `/api/admin/stats/satisfaction` | GET | 满意度统计 |
+| `/api/admin/stats/intents` | GET | 意图分布统计 |
+| `/api/admin/stats/tickets` | GET | 工单统计 |
+| `/api/admin/tickets` | GET | 工单列表 |
+| `/api/admin/tickets/:ticketId` | PATCH | 更新工单状态/分配 |
+| `/api/admin/faq` | GET | FAQ 列表（管理员） |
 
 ## 环境要求
 
-- Node.js 18+
+- Node.js 20+（`better-sqlite3` 需要原生模块匹配 ABI 版本）
 - npm 或 yarn
 
 ## 配置

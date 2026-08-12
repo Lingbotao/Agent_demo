@@ -1,10 +1,10 @@
 /**
- * 向量存储模块 (LangChain Embedding + 轻量内存存储)
+ * 向量存储模块（LangChain Embedding + 内存余弦相似度检索）
  *
  * Embedding: LangChain OpenAIEmbeddings → MiniMax embo-01 或 OpenAI text-embedding-3
- * 存储:     内存向量数组 + 余弦相似度检索
+ * 存储:      内存向量数组 + 余弦相似度检索
  *
- * 用 LangChain 的 Embedding 层替换了 TF-IDF，语义匹配能力质的飞跃。
+ * 向量化通过 Embedding API 完成，本模块只负责缓存向量与余弦相似度排序。
  */
 
 import { OpenAIEmbeddings } from "@langchain/openai";
