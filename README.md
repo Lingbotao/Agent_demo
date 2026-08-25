@@ -12,6 +12,8 @@
 - 🤖 **自定义 Agent** - 创建和管理多个 Agent 配置（含系统提示词）
 - ⭐ **满意度评分** - 会话结束后收集用户反馈
 - 🔐 **鉴权与会话控制** - JWT 登录 + 管理员后台
+- 🛡️ **内容安全过滤** - 敏感词阻断 + 隐私信息脱敏 + 注入风险提示（输入/输出双向）
+- 📚 **FAQ 知识库可视化管理** - 管理员后台 CRUD、分类筛选、关键词检索、变更自动同步向量库
 
 ## 技术栈
 
@@ -21,6 +23,7 @@
 - **图表**: ECharts（管理后台仪表盘）
 - **AI 编排**: LangGraph（CS Agent 工作流）
 - **AI 调用**: 统一 LLM Provider（OpenAI 兼容协议）
+- **内容安全**: 自研敏感词词表 + 正则脱敏 + 流式滑动窗口扫描
 - **数据库**: SQLite (better-sqlite3)
 - **鉴权**: JWT (jsonwebtoken) + bcryptjs
 
@@ -69,11 +72,11 @@ npm run dev
 ```
 Agent_demo/
 ├── server/                      # 后端服务
-│   ├── index.ts                # Express 服务器（API 路由）
+│   ├── index.ts                # Express 服务器（API 路由，含内容安全中间件）
 │   ├── db.ts                   # SQLite 数据库操作（7 张表）
 │   ├── auth.ts                 # JWT 鉴权
 │   ├── admin/                  # 管理后台路由
-│   │   └── routes.ts
+│   │   └── routes.ts           # 仪表盘 / 会话 / 工单 / FAQ 管理
 │   ├── agents/                 # LangGraph 工作流节点
 │   │   ├── graph.ts            # CS Agent 状态图
 │   │   ├── agent.ts            # 通用对话节点
@@ -82,13 +85,16 @@ Agent_demo/
 │   │   ├── escalation.ts       # 工单升级
 │   │   ├── types.ts            # 工作流状态定义
 │   │   └── llm-provider.ts     # 统一 LLM Provider 抽象层
+│   ├── moderation/             # 内容安全过滤
+│   │   ├── contentFilter.ts    # 敏感词 / 隐私 / 注入检测 + 流式扫描
+│   │   └── contentFilter.test.ts
 │   └── rag/                    # 知识库加载与向量检索
-│       ├── faqLoader.ts        # FAQ 初始化与种子数据
-│       └── vectorStore.ts      # Embedding API + 余弦相似度
+│       ├── faqLoader.ts        # FAQ 初始化 / 增删改 / 种子数据
+│       └── vectorStore.ts      # LangChain Embedding API + 余弦相似度
 ├── src/                        # 前端源码
-│   ├── components/             # React 组件
-│   ├── hooks/                  # 自定义 Hooks
-│   ├── pages/                  # 页面组件
+│   ├── components/             # React 组件（含 FaqEditForm 等）
+│   ├── hooks/                  # 自定义 Hooks（useAuth / useChat 等）
+│   ├── pages/                  # 页面组件（含 FaqManagePage）
 │   ├── utils/                  # 工具函数
 │   ├── types.ts                # 类型定义
 │   ├── config.ts               # 应用配置
@@ -101,29 +107,59 @@ Agent_demo/
 ├── tsconfig.json
 ├── vite.config.ts
 ├── README.md                   # 项目说明
+├── PROGRESS.md                 # 开发进度与后续规划
 ├── DEVELOPMENT.md              # 二次开发指南
 ├── DEVELOPMENT_PLAN.md         # 开发方案与历史
 ├── ACCEPTANCE.md               # 验收清单
 ├── RAG_LANDSCAPE.md            # RAG 方案调研与升级路径
-└── overview.md                 # 项目进度总览
+├── TESTING_P0.md               # P0 阶段功能测试文档
+└── UI_CHECKLIST_P0.md          # P0 前端 UI 验收清单
 ```
 
 ## 核心功能
 
 ### 智能客服 Agent（`cs-agent`）
 
-`cs-agent` 是内置模型 ID，走 [server/agents/graph.ts](file:///Users/botao/Desktop/Agent_demo/server/agents/graph.ts) 定义的 LangGraph 工作流，节点顺序：
+`cs-agent` 是内置模型 ID，走 [server/agents/graph.ts](file:///Users/botao/Desktop/Agent_demo/server/agents/graph.ts) 定义的 LangGraph 工作流：
 
-1. `intent` - 意图识别（`refund` 退款 / `order_inquiry` 订单查询 / `tech_support` 技术支持 / `general` 通用）
-2. `rag` - FAQ 知识库检索（Embedding API 向量化 + 余弦相似度）
-3. `agent` - 通用 LLM 回复（无匹配 FAQ 时）
-4. `escalation` - 工单升级（用户明确要求转人工或 LLM 兜底时触发）
+```
+START
+  → detect_intent   意图识别（refund / order_inquiry / tech_support / general）
+  → search_faq      知识库检索（LangChain Embedding + 余弦相似度）
+  → 条件路由：
+      ├─ 命中 FAQ → reply_faq → END
+      └─ 未命中    → call_agent（统一 LLM Provider 流式调用）
+                       → 条件路由：
+                           ├─ 能解决 → END
+                           └─ 无法解决 → create_ticket（升级工单）→ END
+```
 
 SSE 流事件：
 - `intent` - 意图 + 置信度
 - `workflow_meta` - 是否命中 FAQ、是否升级、Ticket ID
 - `text` - 最终回复文本
 - `done` - 结束
+
+### 内容安全过滤
+
+[server/moderation/contentFilter.ts](file:///Users/botao/Desktop/Agent_demo/server/moderation/contentFilter.ts) 在 `/api/chat` 和 `/api/cs-agent/chat` 入口处对输入做同步过滤，对 SSE 流式输出做滑动窗口扫描：
+
+| 类型       | 行为       | 例子                            |
+| ---------- | ---------- | ------------------------------- |
+| 敏感词命中 | 阻断请求   | politics / violence / porn 等 |
+| 隐私信息   | 脱敏改写   | 手机号 / 身份证 / 银行卡 / 邮箱   |
+| 注入风险   | 仅警告     | 提示词注入关键词命中                |
+
+输入端命中敏感词直接返回 400；输出端命中通过 `StreamModerator` 实时拦截并写入 `blocked` 事件。
+
+### FAQ 知识库管理
+
+管理员后台 `/admin/faqs` 页面（[src/pages/FaqManagePage.tsx](file:///Users/botao/Desktop/Agent_demo/src/pages/FaqManagePage.tsx)）提供完整的可视化 CRUD：
+
+- 列表 + 分类筛选（退款 / 订单查询 / 技术支持 / 通用）+ 关键词全文搜索
+- 新增 / 编辑 / 删除（删除前弹确认框，避免误操作）
+- 编辑表单（[FaqEditForm.tsx](file:///Users/botao/Desktop/Agent_demo/src/components/FaqEditForm.tsx)）脱离 TDesign Form/FormItem，使用 CSS Grid + 原生 input，避免受控组件 value 劫持
+- 任何变更通过后端 `replaceFaq` / `addFaq` / `removeFaq` 自动同步向量库（remove → addEntry 重建 embedding）
 
 ### 统一 LLM Provider
 
@@ -180,6 +216,9 @@ SSE 流事件：
 | `/api/admin/tickets` | GET | 工单列表 |
 | `/api/admin/tickets/:ticketId` | PATCH | 更新工单状态/分配 |
 | `/api/admin/faq` | GET | FAQ 列表（管理员） |
+| `/api/admin/faq` | POST | 新增 FAQ（同步向量库） |
+| `/api/admin/faq/:id` | PATCH | 更新 FAQ（同步向量库） |
+| `/api/admin/faq/:id` | DELETE | 删除 FAQ（同步向量库） |
 
 ## 环境要求
 
@@ -233,7 +272,9 @@ npm start
 
 ## 路线图
 
+- [x] FAQ 可视化管理界面（P0-1）
+- [x] 内容安全过滤（敏感词 / 隐私 / 注入）（P0-3）
+- [x] 多轮上下文（P0-2）
 - [ ] 历史会话导出（JSON / Markdown）
 - [ ] WebSocket 长连接替代部分 SSE
 - [ ] CS Agent 多租户配置
-- [ ] FAQ 可视化管理界面
