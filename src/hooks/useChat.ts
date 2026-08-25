@@ -135,6 +135,29 @@ export function useChat(options: UseChatOptions) {
         })
       });
 
+      // 输入端敏感词命中：返回非 SSE 错误
+      if (response.status === 400) {
+        const ct = response.headers.get('content-type') || '';
+        if (!ct.includes('text/event-stream')) {
+          const data = await response.json();
+          const reason = data?.reasons?.join('；') || data?.error || '请求被拦截';
+          setSessions(prev => prev.map(s => {
+            if (s.id === sessionId) {
+              return {
+                ...s,
+                messages: s.messages.map(m =>
+                  m.id === tempAssistantMessageId
+                    ? { ...m, content: `⚠️ ${reason}`, isStreaming: false }
+                    : m
+                )
+              };
+            }
+            return s;
+          }));
+          return;
+        }
+      }
+
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let fullContent = '';

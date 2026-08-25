@@ -397,6 +397,27 @@ export function deleteFaq(id: string): boolean {
   return db.prepare('DELETE FROM faq_knowledge WHERE id = ?').run(id).changes > 0;
 }
 
+export function updateFaq(
+  id: string,
+  updates: Partial<Pick<FaqKnowledge, 'question' | 'answer' | 'category' | 'keywords'>>
+): FaqKnowledge | undefined {
+  const existing = db.prepare('SELECT * FROM faq_knowledge WHERE id = ?').get(id) as FaqKnowledge | undefined;
+  if (!existing) return undefined;
+
+  const next: FaqKnowledge = {
+    ...existing,
+    ...updates,
+    keywords: updates.keywords !== undefined ? updates.keywords : existing.keywords,
+    updated_at: new Date().toISOString(),
+  };
+
+  db.prepare(
+    'UPDATE faq_knowledge SET question = ?, answer = ?, category = ?, keywords = ?, updated_at = ? WHERE id = ?'
+  ).run(next.question, next.answer, next.category, next.keywords, next.updated_at, id);
+
+  return next;
+}
+
 export function getFaqCount(): number {
   return (db.prepare('SELECT COUNT(*) as count FROM faq_knowledge').get() as { count: number }).count;
 }

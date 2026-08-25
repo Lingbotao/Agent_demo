@@ -10,6 +10,7 @@ interface SidebarProps {
   currentSessionId: string | null;
   isSettingsPage: boolean;
   isAdminPage?: boolean;
+  isFaqManagePage?: boolean;
   sidebarOpen: boolean;
   agents: Agent[];
   getAgent: (id: string) => Agent | undefined;
@@ -18,6 +19,7 @@ interface SidebarProps {
   onDeleteSession: (sessionId: string) => void;
   onOpenSettings: () => void;
   onOpenAdmin?: () => void;
+  onOpenFaq?: () => void;
 }
 
 export function Sidebar({
@@ -25,6 +27,7 @@ export function Sidebar({
   currentSessionId,
   isSettingsPage,
   isAdminPage,
+  isFaqManagePage,
   sidebarOpen,
   agents,
   getAgent,
@@ -33,6 +36,7 @@ export function Sidebar({
   onDeleteSession,
   onOpenSettings,
   onOpenAdmin,
+  onOpenFaq,
 }: SidebarProps) {
   return (
     <aside 
@@ -140,6 +144,17 @@ export function Sidebar({
             theme={isAdminPage ? 'primary' : 'default'}
           >
             管理后台
+          </Button>
+        )}
+        {onOpenFaq && (
+          <Button 
+            icon={<Bot />}
+            onClick={onOpenFaq}
+            block
+            variant={isFaqManagePage ? 'outline' : 'text'}
+            theme={isFaqManagePage ? 'primary' : 'default'}
+          >
+            FAQ 管理
           </Button>
         )}
         <Button 

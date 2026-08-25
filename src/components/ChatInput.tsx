@@ -38,7 +38,6 @@ export function ChatInput({
   }, [inputValue, selectedModel, onSend]);
 
   const handleChange = useCallback((e: any) => {
-    console.log('ChatSender change event:', e);
     const value = e?.detail ?? e ?? '';
     onChange(typeof value === 'string' ? value : '');
   }, [onChange]);

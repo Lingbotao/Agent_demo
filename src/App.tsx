@@ -14,6 +14,7 @@ import { Header } from './components/Header';
 import { SettingsPage } from './components/SettingsPage';
 import { ChatPage } from './pages/ChatPage';
 import AdminPage from './pages/AdminPage';
+import FaqManagePage from './pages/FaqManagePage';
 import LoginPage from './pages/LoginPage';
 
 function App() {
@@ -25,6 +26,7 @@ function App() {
         <Route path="/chat/:sessionId" element={<RequireAuth><AppContent /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><AppContent /></RequireAuth>} />
         <Route path="/admin" element={<RequireAuth><RequireAdmin><AppContent /></RequireAdmin></RequireAuth>} />
+        <Route path="/admin/faq" element={<RequireAuth><RequireAdmin><AppContent /></RequireAdmin></RequireAuth>} />
       </Routes>
     </AuthProvider>
   );
@@ -58,6 +60,7 @@ function AppContent() {
   const location = useLocation();
   const isSettingsPage = location.pathname === '/settings';
   const isAdminPage = location.pathname === '/admin';
+  const isFaqManagePage = location.pathname === '/admin/faq';
   
   // Hooks
   const { theme, toggleTheme } = useTheme();
@@ -105,10 +108,10 @@ function AppContent() {
   useEffect(() => {
     if (urlSessionId && urlSessionId !== currentSessionId) {
       setCurrentSessionId(urlSessionId);
-    } else if (!urlSessionId && !isSettingsPage && currentSessionId) {
+    } else if (!urlSessionId && !isSettingsPage && !isAdminPage && !isFaqManagePage && currentSessionId) {
       setCurrentSessionId(null);
     }
-  }, [urlSessionId, isSettingsPage, currentSessionId, setCurrentSessionId]);
+  }, [urlSessionId, isSettingsPage, isAdminPage, isFaqManagePage, currentSessionId, setCurrentSessionId]);
 
   // 当切换会话时，恢复该会话的模型选择
   useEffect(() => {
@@ -159,6 +162,10 @@ function AppContent() {
     navigate('/admin');
   }, [navigate]);
 
+  const handleOpenFaq = useCallback(() => {
+    navigate('/admin/faq');
+  }, [navigate]);
+
   // Sidebar 状态
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -173,6 +180,7 @@ function AppContent() {
         currentSessionId={currentSessionId}
         isSettingsPage={isSettingsPage}
         isAdminPage={isAdminPage}
+        isFaqManagePage={isFaqManagePage}
         sidebarOpen={sidebarOpen}
         agents={agents}
         getAgent={getAgent}
@@ -181,6 +189,7 @@ function AppContent() {
         onDeleteSession={handleDeleteSession}
         onOpenSettings={handleOpenSettings}
         onOpenAdmin={handleOpenAdmin}
+        onOpenFaq={handleOpenFaq}
       />
 
       {/* 主内容区 */}
@@ -192,6 +201,7 @@ function AppContent() {
         <Header
           isSettingsPage={isSettingsPage}
           isAdminPage={isAdminPage}
+          isFaqManagePage={isFaqManagePage}
           sidebarOpen={sidebarOpen}
           theme={theme}
           currentSession={currentSession}
@@ -202,7 +212,7 @@ function AppContent() {
           onRefreshModels={fetchModels}
         />
 
-        {/* 设置页面、管理后台或聊天页面 */}
+        {/* 设置页面、管理后台、FAQ 管理或聊天页面 */}
         {isSettingsPage ? (
           <SettingsPage
             agents={agents}
@@ -212,6 +222,8 @@ function AppContent() {
           />
         ) : isAdminPage ? (
           <AdminPage />
+        ) : isFaqManagePage ? (
+          <FaqManagePage />
         ) : (
           <ChatPage
             currentSession={currentSession}

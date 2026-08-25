@@ -148,6 +148,29 @@ export async function addFaq(question: string, answer: string, category: string,
   return faq;
 }
 
+/** 更新 FAQ 条目 */
+export async function replaceFaq(
+  id: string,
+  updates: { question?: string; answer?: string; category?: string; keywords?: string | null }
+): Promise<db.FaqKnowledge | undefined> {
+  // 仅向 db.updateFaq 传入"实际被显式提供"的字段，避免 undefined 覆盖原值
+  const partial: Parameters<typeof db.updateFaq>[1] = {};
+  if (updates.question !== undefined) partial.question = updates.question;
+  if (updates.answer !== undefined) partial.answer = updates.answer;
+  if (updates.category !== undefined) partial.category = updates.category;
+  // keywords 允许显式传 null（清空），但未提供时不应覆盖
+  if (updates.keywords !== undefined) partial.keywords = updates.keywords ?? undefined;
+
+  const updated = db.updateFaq(id, partial);
+  if (!updated) return undefined;
+
+  const store = getVectorStore();
+  // 旧向量先移除，再用新文本重建
+  await store.removeEntry(id);
+  await store.addEntry(updated);
+  return updated;
+}
+
 /** 从知识库删除 FAQ */
 export async function removeFaq(id: string): Promise<boolean> {
   const success = db.deleteFaq(id);

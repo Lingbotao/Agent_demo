@@ -11,6 +11,7 @@ import { getWorkflow } from "./agents/graph.js";
 import { initializeFaqKnowledge } from "./rag/faqLoader.js";
 import { getLLMProvider } from "./agents/llm-provider.js";
 import adminRoutes from "./admin/routes.js";
+import { moderateContent, StreamModerator } from "./moderation/contentFilter.js";
 import {
   attachUser,
   requireAuth,
@@ -279,6 +280,17 @@ app.post("/api/chat", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "消息不能为空" });
   }
 
+  // ===== 输入端敏感词过滤 =====
+  const inputModeration = moderateContent(message);
+  if (inputModeration.blocked) {
+    return res.status(400).json({
+      error: "输入内容包含敏感词，请修改后重试",
+      reasons: inputModeration.reasons,
+    });
+  }
+  // 即便不阻断，也用脱敏后的内容入库存与提示词拼接
+  const safeMessage = inputModeration.sanitized;
+
   // 获取或创建会话
   let session = sessionId ? db.getSession(sessionId) : null;
   const now = new Date().toISOString();
@@ -286,7 +298,7 @@ app.post("/api/chat", requireAuth, async (req, res) => {
   if (!session) {
     session = db.createSession({
       id: sessionId || uuidv4(),
-      title: message.slice(0, 30) + (message.length > 30 ? '...' : ''),
+      title: safeMessage.slice(0, 30) + (safeMessage.length > 30 ? '...' : ''),
       model: model || defaultModel,
       created_at: now,
       updated_at: now
@@ -305,7 +317,7 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       id: userMessageId,
       session_id: session.id,
       role: 'user',
-      content: message,
+      content: safeMessage,
       model: null,
       created_at: now,
       tool_calls: null
@@ -332,13 +344,16 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       .slice(-HISTORY_LIMIT)
       .map((m) => ({
         role: (m.role === 'user' || m.role === 'assistant' || m.role === 'system') ? m.role : 'user',
-        content: m.content || '',
+        // 历史消息若残留隐私信息（早期版本未脱敏），落地再扫一次
+        content: moderateContent(m.content || '').sanitized,
       })) as Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
 
     // 通过统一 LLM Provider 调用
     const provider = await getLLMProvider();
 
     let fullResponse = '';
+    let blocked = false;
+    const streamModerator = new StreamModerator();
     let toolCalls: Array<{
       id: string;
       name: string;
@@ -359,19 +374,45 @@ app.post("/api/chat", requireAuth, async (req, res) => {
 
     const startTime = Date.now();
     const result = await provider.chat({
-      prompt: message,
+      prompt: safeMessage,
       systemPrompt: systemPrompt || defaultSystemPrompt,
       model: selectedModel,
       history: historyMessages,
       onText: (text) => {
-        fullResponse += text;
-        res.write(`data: ${JSON.stringify({ type: "text", content: text })}\n\n`);
+        if (blocked) return; // 已被阻断就不再外发
+
+        // ===== 输出端流式过滤 =====
+        const scan = streamModerator.scan(text);
+        if (scan.block) {
+          blocked = true;
+          fullResponse = "（系统提示：本回答包含敏感词，已被过滤）";
+          res.write(`data: ${JSON.stringify({ type: "text", content: fullResponse })}\n\n`);
+          return;
+        }
+        const emitted = scan.redactedText !== undefined ? scan.redactedText : text;
+        if (emitted) {
+          fullResponse += emitted;
+          res.write(`data: ${JSON.stringify({ type: "text", content: emitted })}\n\n`);
+        }
       },
     });
 
+    // 流结束：flush 残余缓冲
+    if (!blocked) {
+      const flush = streamModerator.flush();
+      if (flush.block) {
+        blocked = true;
+        fullResponse = "（系统提示：本回答包含敏感词，已被过滤）";
+        res.write(`data: ${JSON.stringify({ type: "text", content: fullResponse })}\n\n`);
+      } else if (flush.redactedText) {
+        fullResponse += flush.redactedText;
+        res.write(`data: ${JSON.stringify({ type: "text", content: flush.redactedText })}\n\n`);
+      }
+    }
+
     const duration = Date.now() - startTime;
 
-    // 保存助手消息到数据库
+    // 保存助手消息到数据库（保存过滤后的版本）
     db.createMessage({
       id: assistantMessageId,
       session_id: session.id,
@@ -386,12 +427,12 @@ app.post("/api/chat", requireAuth, async (req, res) => {
     const messages = db.getMessagesBySession(session.id);
     if (messages.length <= 2) {
       db.updateSession(session.id, {
-        title: message.slice(0, 30) + (message.length > 30 ? '...' : ''),
+        title: safeMessage.slice(0, 30) + (safeMessage.length > 30 ? '...' : ''),
         model: selectedModel
       });
     }
 
-    res.write(`data: ${JSON.stringify({ type: "done", duration })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: "done", duration, blocked })}\n\n`);
     res.end();
   } catch (error: any) {
     console.error(`[Chat] LLM 调用失败:`, error?.message);
@@ -446,14 +487,24 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "消息不能为空" });
   }
 
+  // ===== 输入端敏感词过滤 =====
+  const inputModeration = moderateContent(message);
+  if (inputModeration.blocked) {
+    return res.status(400).json({
+      error: "输入内容包含敏感词，请修改后重试",
+      reasons: inputModeration.reasons,
+    });
+  }
+  const safeMessage = inputModeration.sanitized;
+
   // 获取或创建会话
   let session = sessionId ? db.getSession(sessionId) : null;
   const now = new Date().toISOString();
 
   if (!session) {
     // 检查是否有转人工请求
-    const isTransfer = /转人工|人工客服|人工服务/.test(message);
-    const title = isTransfer ? `转人工: ${message.slice(0, 30)}` : message.slice(0, 30) + (message.length > 30 ? '...' : '');
+    const isTransfer = /转人工|人工客服|人工服务/.test(safeMessage);
+    const title = isTransfer ? `转人工: ${safeMessage.slice(0, 30)}` : safeMessage.slice(0, 30) + (safeMessage.length > 30 ? '...' : '');
     
     session = db.createSession({
       id: sessionId || uuidv4(),
@@ -467,12 +518,12 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
   const userMessageId = uuidv4();
   const assistantMessageId = uuidv4();
 
-  // 保存用户消息
+  // 保存用户消息（脱敏版本）
   db.createMessage({
     id: userMessageId,
     session_id: session.id,
     role: 'user',
-    content: message,
+    content: safeMessage,
     model: null,
     created_at: now,
     tool_calls: null,
@@ -486,7 +537,8 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
     .slice(-HISTORY_LIMIT)
     .map((m) => ({
       role: (m.role === 'user' || m.role === 'assistant' || m.role === 'system') ? m.role : 'user',
-      content: m.content || '',
+      // 历史消息落地时再扫一次隐私脱敏
+      content: moderateContent(m.content || '').sanitized,
     })) as Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
 
   // 设置 SSE
@@ -507,7 +559,7 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
     const workflow = getWorkflow();
 
     // 先发送意图识别结果
-    const { intent, confidence } = workflow.detectIntent(message);
+    const { intent, confidence } = workflow.detectIntent(safeMessage);
     const intentLabel = ['refund', 'order_inquiry', 'tech_support', 'general'].includes(intent) ? intent : 'general';
     
     res.write(`data: ${JSON.stringify({
@@ -516,21 +568,46 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
       confidence,
     })}\n\n`);
 
-    // 执行智能客服工作流
+    // 执行智能客服工作流（用脱敏消息 + 流式输出过滤）
     let fullResponse = '';
+    let blocked = false;
+    const streamModerator = new StreamModerator();
+
     const finalState = await workflow.run(
-      message,
+      safeMessage,
       session.id,
       userMessageId,
       (text: string) => {
-        fullResponse += text;
-        res.write(`data: ${JSON.stringify({
-          type: "text",
-          content: text,
-        })}\n\n`);
+        if (blocked) return;
+        // ===== 输出端流式过滤 =====
+        const scan = streamModerator.scan(text);
+        if (scan.block) {
+          blocked = true;
+          fullResponse = "（系统提示：本回答包含敏感词，已被过滤）";
+          res.write(`data: ${JSON.stringify({ type: "text", content: fullResponse })}\n\n`);
+          return;
+        }
+        const emitted = scan.redactedText !== undefined ? scan.redactedText : text;
+        if (emitted) {
+          fullResponse += emitted;
+          res.write(`data: ${JSON.stringify({ type: "text", content: emitted })}\n\n`);
+        }
       },
       historyMessages
     );
+
+    // 流结束：flush 残余缓冲
+    if (!blocked) {
+      const flush = streamModerator.flush();
+      if (flush.block) {
+        blocked = true;
+        fullResponse = "（系统提示：本回答包含敏感词，已被过滤）";
+        res.write(`data: ${JSON.stringify({ type: "text", content: fullResponse })}\n\n`);
+      } else if (flush.redactedText) {
+        fullResponse += flush.redactedText;
+        res.write(`data: ${JSON.stringify({ type: "text", content: flush.redactedText })}\n\n`);
+      }
+    }
 
     console.log(`[CS-Agent] 完成: intent=${finalState.intent}, faq=${finalState.usedFaq}, escalate=${finalState.shouldEscalate}`);
 
@@ -544,7 +621,7 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
       faqScore: finalState.faqResults[0]?.score || 0,
     })}\n\n`);
 
-    // 保存助手消息
+    // 保存助手消息（保存过滤后版本）
     db.createMessage({
       id: assistantMessageId,
       session_id: session.id,
@@ -563,12 +640,12 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
     const messages = db.getMessagesBySession(session.id);
     if (messages.length <= 2) {
       const title = finalState.intent && finalState.intent !== 'general'
-        ? `[${finalState.intent}] ${message.slice(0, 25)}`
-        : message.slice(0, 30) + (message.length > 30 ? '...' : '');
+        ? `[${finalState.intent}] ${safeMessage.slice(0, 25)}`
+        : safeMessage.slice(0, 30) + (safeMessage.length > 30 ? '...' : '');
       db.updateSession(session.id, { title });
     }
 
-    res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: "done", blocked })}\n\n`);
     res.end();
   } catch (error: any) {
     console.error(`[CS-Agent] Error:`, error);

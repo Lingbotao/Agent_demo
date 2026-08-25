@@ -5,6 +5,7 @@
 
 import { Router, Request, Response } from 'express';
 import * as db from '../db.js';
+import { addFaq, replaceFaq, removeFaq } from '../rag/faqLoader.js';
 
 const router = Router();
 
@@ -228,6 +229,48 @@ router.get('/faq', (req: Request, res: Response) => {
     res.json({ faqs: faqList, total: faqList.length });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+/** 创建 FAQ */
+router.post('/faq', async (req: Request, res: Response) => {
+  try {
+    const { question, answer, category, keywords } = req.body || {};
+    if (!question || !answer || !category) {
+      return res.status(400).json({ error: 'question / answer / category 均必填' });
+    }
+    const created = await addFaq(question, answer, category, keywords);
+    res.json({ faq: created });
+  } catch (error: any) {
+    console.error('[Admin/FAQ] create error:', error);
+    res.status(500).json({ error: error?.message || '创建 FAQ 失败' });
+  }
+});
+
+/** 更新 FAQ */
+router.patch('/faq/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { question, answer, category, keywords } = req.body || {};
+    const updated = await replaceFaq(id, { question, answer, category, keywords });
+    if (!updated) return res.status(404).json({ error: 'FAQ 不存在' });
+    res.json({ faq: updated });
+  } catch (error: any) {
+    console.error('[Admin/FAQ] update error:', error);
+    res.status(500).json({ error: error?.message || '更新 FAQ 失败' });
+  }
+});
+
+/** 删除 FAQ */
+router.delete('/faq/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const ok = await removeFaq(id);
+    if (!ok) return res.status(404).json({ error: 'FAQ 不存在' });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('[Admin/FAQ] delete error:', error);
+    res.status(500).json({ error: error?.message || '删除 FAQ 失败' });
   }
 });
 

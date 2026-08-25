@@ -14,6 +14,7 @@ import { ICON_MAP } from '../utils/iconMap';
 interface HeaderProps {
   isSettingsPage: boolean;
   isAdminPage?: boolean;
+  isFaqManagePage?: boolean;
   sidebarOpen: boolean;
   theme: Theme;
   currentSession: Session | undefined;
@@ -27,6 +28,7 @@ interface HeaderProps {
 export function Header({
   isSettingsPage,
   isAdminPage,
+  isFaqManagePage,
   sidebarOpen,
   theme,
   currentSession,
@@ -74,7 +76,7 @@ export function Header({
           className="text-base font-semibold"
           style={{ color: 'var(--td-text-color-primary)' }}
         >
-          {isSettingsPage ? '设置' : isAdminPage ? '📊 管理后台' : (currentSession?.title || APP_CONFIG.name)}
+          {isSettingsPage ? '设置' : isFaqManagePage ? '📚 FAQ 知识库管理' : isAdminPage ? '📊 管理后台' : (currentSession?.title || APP_CONFIG.name)}
         </h1>
         {!isSettingsPage && currentSession && (
           <Tag size="small" variant="outline">
