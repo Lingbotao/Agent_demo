@@ -5,6 +5,8 @@ import { NewChatView } from '../components/NewChatView';
 import { ChatMessages } from '../components/ChatMessages';
 import { ChatInput } from '../components/ChatInput';
 import SatisfactionRating from '../components/SatisfactionRating';
+import { Button, Dropdown } from 'tdesign-react';
+import { DownloadIcon } from 'tdesign-icons-react';
 
 interface ChatPageProps {
   currentSession: Session | undefined;
@@ -17,6 +19,7 @@ interface ChatPageProps {
   onStop: () => void;
   onInputChange: (value: string) => void;
   onModelChange: (modelId: string) => void;
+  onRecallMessage?: (messageId: string) => void;
 }
 
 interface NewChatOptions {
@@ -34,6 +37,7 @@ export function ChatPage({
   onStop,
   onInputChange,
   onModelChange,
+  onRecallMessage,
 }: ChatPageProps) {
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -63,6 +67,18 @@ export function ChatPage({
     }
   }, [currentSession, newChatAgentId, onSendMessage, navigate]);
 
+  // 处理快捷问题点击
+  const handleQuickQuestion = useCallback((question: string) => {
+    handleSend(question);
+  }, [handleSend]);
+
+  // 处理导出对话
+  const handleExport = useCallback((format: 'json' | 'markdown') => {
+    if (!currentSession) return;
+    const url = `/api/sessions/${currentSession.id}/export?format=${format}`;
+    window.open(url, '_blank');
+  }, [currentSession]);
+
   const showNewChatView = !currentSession || currentSession.messages.length === 0;
 
   return (
@@ -79,13 +95,33 @@ export function ChatPage({
             onSelectModel={onModelChange}
             onSelectAgent={setNewChatAgentId}
             onSetCwd={setNewChatCwd}
+            onQuickQuestion={handleQuickQuestion}
           />
         ) : (
-          <ChatMessages
-            messages={currentSession!.messages}
-            models={models}
-            messagesEndRef={messagesEndRef}
-          />
+          <>
+            <ChatMessages
+              messages={currentSession!.messages}
+              models={models}
+              messagesEndRef={messagesEndRef}
+              onRecallMessage={onRecallMessage}
+            />
+            {/* 导出按钮 */}
+            {currentSession && currentSession.messages.length > 0 && (
+              <div className="flex justify-center mt-4">
+                <Dropdown
+                  options={[
+                    { content: '导出 JSON', value: 'json' },
+                    { content: '导出 Markdown', value: 'markdown' },
+                  ]}
+                  onClick={(data) => handleExport(data.value as 'json' | 'markdown')}
+                >
+                  <Button variant="outline" size="small" icon={<DownloadIcon />}>
+                    导出对话
+                  </Button>
+                </Dropdown>
+              </div>
+            )}
+          </>
         )}
         {/* 会话结束后显示满意度评分 */}
         {currentSession && currentSession.messages.length > 0 && !isLoading && (

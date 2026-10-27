@@ -1,9 +1,16 @@
 import { Input } from 'tdesign-react';
 import { FolderOpenIcon } from 'tdesign-icons-react';
-import { Bot } from 'lucide-react';
+import { Bot, Zap } from 'lucide-react';
 import { APP_CONFIG } from '../config';
 import { Model, Agent } from '../types';
 import { ICON_MAP } from '../utils/iconMap';
+import { useState, useEffect } from 'react';
+
+interface FaqSuggestion {
+  id: string;
+  question: string;
+  category: string;
+}
 
 interface NewChatViewProps {
   agents: Agent[];
@@ -14,7 +21,16 @@ interface NewChatViewProps {
   onSelectModel: (modelId: string) => void;
   onSelectAgent: (agentId: string) => void;
   onSetCwd: (cwd: string) => void;
+  onQuickQuestion?: (question: string) => void;
 }
+
+/** 分类标签映射 */
+const CATEGORY_LABELS: Record<string, string> = {
+  refund: '退款',
+  order_inquiry: '订单查询',
+  tech_support: '技术支持',
+  general: '通用',
+};
 
 export function NewChatView({
   agents,
@@ -22,8 +38,17 @@ export function NewChatView({
   newChatCwd,
   onSelectAgent,
   onSetCwd,
+  onQuickQuestion,
 }: NewChatViewProps) {
   const selectedAgent = agents.find(a => a.id === newChatAgentId);
+  const [suggestions, setSuggestions] = useState<Record<string, FaqSuggestion[]>>({});
+
+  useEffect(() => {
+    fetch('/api/faq/suggestions')
+      .then(r => r.json())
+      .then(data => setSuggestions(data.suggestions || {}))
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="flex flex-col items-center justify-center h-full">
@@ -109,6 +134,38 @@ export function NewChatView({
             指定 Agent 的工作目录，用于文件操作等
           </p>
         </div>
+
+        {/* 快捷问题推荐 */}
+        {Object.keys(suggestions).length > 0 && (
+          <div className="mb-6">
+            <div className="flex items-center gap-2 mb-3">
+              <Zap size={16} style={{ color: 'var(--td-warning-color)' }} />
+              <label className="text-sm font-medium" style={{ color: 'var(--td-text-color-primary)' }}>
+                快捷问题
+              </label>
+            </div>
+            <div className="space-y-2">
+              {Object.entries(suggestions).map(([category, items]) => (
+                <div key={category} className="flex flex-wrap gap-2">
+                  {items.map(item => (
+                    <button
+                      key={item.id}
+                      className="text-xs px-3 py-1.5 rounded-full border transition-colors hover:opacity-80"
+                      style={{
+                        borderColor: 'var(--td-component-stroke)',
+                        backgroundColor: 'var(--td-bg-color-component)',
+                        color: 'var(--td-text-color-secondary)',
+                      }}
+                      onClick={() => onQuickQuestion?.(item.question)}
+                    >
+                      {CATEGORY_LABELS[category] || category}: {item.question}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 选中的 Agent 预览 */}
         {selectedAgent && (

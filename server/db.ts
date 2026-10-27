@@ -147,6 +147,10 @@ try {
     db.exec("ALTER TABLE messages ADD COLUMN faq_score REAL");
     console.log("[DB] Added faq_score column to messages table");
   }
+  if (!msgCols.some(c => c.name === 'status')) {
+    db.exec("ALTER TABLE messages ADD COLUMN status TEXT DEFAULT 'active'");
+    console.log("[DB] Added status column to messages table");
+  }
 } catch (e) {
   // 忽略错误
 }
@@ -174,6 +178,7 @@ export interface DbMessage {
   should_escalate?: boolean;
   ticket_id?: string | null;
   faq_score?: number | null;
+  status?: string;
 }
 
 // ============= 会话操作 =============
@@ -299,6 +304,70 @@ export function deleteMessage(id: string): boolean {
   const stmt = db.prepare('DELETE FROM messages WHERE id = ?');
   const result = stmt.run(id);
   return result.changes > 0;
+}
+
+// 获取单条消息
+export function getMessage(id: string): DbMessage | undefined {
+  const stmt = db.prepare('SELECT * FROM messages WHERE id = ?');
+  return stmt.get(id) as DbMessage | undefined;
+}
+
+// 撤回消息（软删除，标记为 recalled）
+export function recallMessage(id: string): boolean {
+  const stmt = db.prepare("UPDATE messages SET status = 'recalled', content = '[消息已撤回]' WHERE id = ? AND role = 'user'");
+  const result = stmt.run(id);
+  // 同时更新会话的 updated_at
+  if (result.changes > 0) {
+    const msg = getMessage(id);
+    if (msg) {
+      db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?')
+        .run(new Date().toISOString(), msg.session_id);
+    }
+  }
+  return result.changes > 0;
+}
+
+/**
+ * 撤回一条用户消息及其后紧跟的 AI 助手回复（成对撤回）
+ * 返回 { userRecalled: boolean, assistantId?: string, assistantRecalled?: boolean }
+ */
+export function recallMessagePair(userMsgId: string): {
+  userRecalled: boolean;
+  assistantId?: string;
+  assistantRecalled?: boolean;
+} {
+  const userMsg = getMessage(userMsgId);
+  if (!userMsg || userMsg.role !== 'user') {
+    return { userRecalled: false };
+  }
+
+  // 在同一会话下，找到该 user 消息之后的第一个 assistant 消息
+  const siblingAssistant = db
+    .prepare(
+      `SELECT id FROM messages
+       WHERE session_id = ? AND role = 'assistant' AND created_at > ?
+       ORDER BY created_at ASC LIMIT 1`
+    )
+    .get(userMsg.session_id, userMsg.created_at) as { id: string } | undefined;
+
+  const userOk = recallMessage(userMsgId);
+
+  let assistantId: string | undefined;
+  let assistantOk: boolean | undefined;
+  if (siblingAssistant) {
+    assistantId = siblingAssistant.id;
+    const stmt = db.prepare(
+      "UPDATE messages SET status = 'recalled', content = '[消息已撤回]' WHERE id = ?"
+    );
+    const r = stmt.run(assistantId);
+    assistantOk = r.changes > 0;
+  }
+
+  return {
+    userRecalled: userOk,
+    assistantId,
+    assistantRecalled: assistantOk,
+  };
 }
 
 // 批量创建消息（用于保存对话）

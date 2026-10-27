@@ -88,6 +88,7 @@ function AppContent() {
     setInputValue,
     sendMessage,
     handleStop,
+    recallMessage,
   } = useChat({
     currentSession,
     currentSessionId,
@@ -236,6 +237,7 @@ function AppContent() {
             onStop={handleStop}
             onInputChange={setInputValue}
             onModelChange={updateCurrentSessionModel}
+            onRecallMessage={recallMessage}
           />
         )}
       </main>

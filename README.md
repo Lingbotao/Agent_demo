@@ -1,280 +1,304 @@
 # Smart CS Agent
 
-一个基于 LangGraph 工作流 + 统一 LLM Provider 抽象层的智能客服 Web 应用，同时支持通用对话。
+一个基于 LangGraph 工作流与统一 LLM Provider 抽象层的智能客服 Web 应用，同时支持通用对话。
 
-## 特性
+## 当前能力
 
-- 💬 **流式对话** - 实时显示 AI 回复（SSE）
-- 🤖 **智能客服 Agent** - 意图识别 + FAQ 匹配 + 工单升级（`cs-agent` 模型）
-- 🔀 **统一 LLM Provider** - 通过环境变量自动切换 MiniMax / 任意 OpenAI 兼容 API
-- 📝 **会话管理** - 多会话切换、模型切换、Agent 绑定、历史持久化
-- 🎨 **主题切换** - 支持深色 / 浅色主题
-- 🤖 **自定义 Agent** - 创建和管理多个 Agent 配置（含系统提示词）
-- ⭐ **满意度评分** - 会话结束后收集用户反馈
-- 🔐 **鉴权与会话控制** - JWT 登录 + 管理员后台
-- 🛡️ **内容安全过滤** - 敏感词阻断 + 隐私信息脱敏 + 注入风险提示（输入/输出双向）
-- 📚 **FAQ 知识库可视化管理** - 管理员后台 CRUD、分类筛选、关键词检索、变更自动同步向量库
+- **流式对话**：通过 SSE 实时输出 AI 回复
+- **智能客服 Agent**：意图识别、FAQ 语义检索、LLM 回答与人工工单升级
+- **统一 LLM Provider**：通过环境变量选择 MiniMax、任意 OpenAI 兼容 API 或演示兜底模式
+- **多轮上下文**：调用模型前读取当前会话的历史消息
+- **会话管理**：创建、切换、重命名、切换模型、持久化和删除会话
+- **消息撤回**：撤回用户消息时，同时软删除紧随其后的 AI 回复
+- **会话导出**：支持 JSON 和 Markdown 格式
+- **FAQ 能力**：快捷问题、自动补全 API、管理员可视化 CRUD 和向量索引同步
+- **内容安全**：敏感词阻断、隐私信息脱敏、提示词注入风险提示和流式输出扫描
+- **管理后台**：会话、意图、满意度、工单和 FAQ 管理
+- **鉴权**：JWT 登录、bcrypt 密码哈希和 `admin` / `agent` / `visitor` 角色
+- **自定义 Agent**：在浏览器本地创建包含系统提示词的 Agent 配置
+- **主题切换**：支持深色和浅色主题
 
 ## 技术栈
 
-- **后端**: Node.js + Express + TypeScript + LangGraph（状态图引擎）+ LangChain（ChatOpenAI / OpenAIEmbeddings）
-- **前端**: React 18 + TypeScript + Vite
-- **UI**: TDesign React 组件库 + Tailwind CSS
-- **图表**: ECharts（管理后台仪表盘）
-- **AI 编排**: LangGraph（CS Agent 工作流）
-- **AI 调用**: 统一 LLM Provider（OpenAI 兼容协议）
-- **内容安全**: 自研敏感词词表 + 正则脱敏 + 流式滑动窗口扫描
-- **数据库**: SQLite (better-sqlite3)
-- **鉴权**: JWT (jsonwebtoken) + bcryptjs
+- **前端**：React 18、TypeScript、Vite
+- **UI**：TDesign React、Tailwind CSS
+- **图表**：ECharts
+- **后端**：Node.js、Express、TypeScript
+- **AI 编排**：LangGraph
+- **AI 调用**：LangChain `ChatOpenAI`
+- **FAQ 向量化**：LangChain `OpenAIEmbeddings` + 内存余弦相似度检索
+- **数据库**：SQLite（better-sqlite3，WAL 模式）
+- **鉴权**：jsonwebtoken、bcryptjs
+- **测试**：Vitest
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 环境要求
+
+- Node.js 20+
+- npm
+
+`better-sqlite3` 是原生模块。如果切换过 Node.js 主版本，可以执行：
+
+```bash
+npm run rebuild:native
+```
+
+### 2. 安装依赖
 
 ```bash
 npm install
 ```
 
-### 2. 配置 LLM API Key（二选一）
+### 3. 配置环境变量
 
-编辑 `.env` 文件，配置以下之一：
+复制 `.env.example` 为 `.env`，并选择一种 LLM Provider：
 
 ```bash
-# 方案 A: MiniMax API（推荐）
+# 方案 A：MiniMax
 MINIMAX_API_KEY=your_minimax_api_key
 # MINIMAX_BASE_URL=https://api.minimax.chat/v1
 # MINIMAX_MODEL=MiniMax-M1
+# MINIMAX_EMBEDDING_MODEL=embo-01
 
-# 方案 B: 任意 OpenAI 兼容 API（DeepSeek / Qwen / SiliconFlow / Groq 等）
+# 方案 B：任意 OpenAI 兼容 API
 # OPENAI_API_KEY=your_api_key
 # OPENAI_BASE_URL=https://api.openai.com/v1
 # OPENAI_MODEL=gpt-4o-mini
+# EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-> 未配置任何 Key 时，进入演示模式（`cs-agent` 模型走 LangGraph 离线工作流，无 Key 也能跑）。
+Provider 选择优先级为 `MINIMAX_API_KEY` → `OPENAI_API_KEY` → 演示兜底。
 
-### 3. 启动开发服务器
+未配置 API Key 时，应用仍可启动，聊天使用模板化演示回复。当前 FAQ 语义检索依赖 Embedding API；Embedding 不可用时向量库会降级为空结果，因此演示模式下不能保证命中 FAQ。
+
+### 4. 启动开发环境
 
 ```bash
 npm run dev
 ```
 
-这会同时启动前端（端口 5173）和后端（端口 3000）。
+该命令同时启动：
 
-### 4. 访问应用
+- 前端：http://localhost:5173
+- 后端：http://localhost:3000
 
-打开浏览器访问 http://localhost:5173
+首次启动且用户表为空时，会自动创建管理员账号：
 
-默认管理员账号：`admin` / `admin123`（首次启动自动初始化）。
+```text
+用户名：admin
+密码：admin123
+```
+
+生产或共享环境必须通过 `ADMIN_USERNAME`、`ADMIN_PASSWORD` 和 `JWT_SECRET` 覆盖默认值。
+
+## 常用命令
+
+```bash
+npm run dev          # 同时启动前后端开发服务器
+npm run dev:server   # 仅启动后端，支持热更新
+npm run dev:client   # 仅启动前端
+npm test             # 单次运行 Vitest
+npm run test:watch   # Vitest watch 模式
+npm run build        # TypeScript 构建 + Vite 前端构建
+npm run preview      # 预览前端构建产物
+npm run server       # 启动后端 API
+```
+
+当前没有 `npm start`，也没有由 Express 直接托管 `dist/` 的单体生产启动脚本。部署时需要分别托管前端构建产物并运行后端 API。
 
 ## 项目结构
 
-```
+```text
 Agent_demo/
-├── server/                      # 后端服务
-│   ├── index.ts                # Express 服务器（API 路由，含内容安全中间件）
-│   ├── db.ts                   # SQLite 数据库操作（7 张表）
-│   ├── auth.ts                 # JWT 鉴权
-│   ├── admin/                  # 管理后台路由
-│   │   └── routes.ts           # 仪表盘 / 会话 / 工单 / FAQ 管理
-│   ├── agents/                 # LangGraph 工作流节点
-│   │   ├── graph.ts            # CS Agent 状态图
-│   │   ├── agent.ts            # 通用对话节点
-│   │   ├── intent.ts           # 意图识别
-│   │   ├── rag.ts              # FAQ 检索
-│   │   ├── escalation.ts       # 工单升级
-│   │   ├── types.ts            # 工作流状态定义
-│   │   └── llm-provider.ts     # 统一 LLM Provider 抽象层
-│   ├── moderation/             # 内容安全过滤
-│   │   ├── contentFilter.ts    # 敏感词 / 隐私 / 注入检测 + 流式扫描
+├── server/
+│   ├── index.ts                 # Express 服务、业务 API 与 SSE 流
+│   ├── db.ts                    # SQLite Schema、迁移与数据访问
+│   ├── auth.ts                  # JWT、密码和角色中间件
+│   ├── admin/routes.ts          # 管理后台 API
+│   ├── agents/
+│   │   ├── graph.ts             # LangGraph 客服工作流
+│   │   ├── agent.ts             # LLM 对话节点
+│   │   ├── intent.ts            # 规则意图识别
+│   │   ├── rag.ts               # FAQ 检索节点
+│   │   ├── escalation.ts        # 工单升级节点
+│   │   ├── types.ts             # 工作流状态定义
+│   │   └── llm-provider.ts      # MiniMax / OpenAI 兼容 / 演示 Provider
+│   ├── moderation/
+│   │   ├── contentFilter.ts     # 输入、输出内容安全过滤
 │   │   └── contentFilter.test.ts
-│   └── rag/                    # 知识库加载与向量检索
-│       ├── faqLoader.ts        # FAQ 初始化 / 增删改 / 种子数据
-│       └── vectorStore.ts      # LangChain Embedding API + 余弦相似度
-├── src/                        # 前端源码
-│   ├── components/             # React 组件（含 FaqEditForm 等）
-│   ├── hooks/                  # 自定义 Hooks（useAuth / useChat 等）
-│   ├── pages/                  # 页面组件（含 FaqManagePage）
-│   ├── utils/                  # 工具函数
-│   ├── types.ts                # 类型定义
-│   ├── config.ts               # 应用配置
-│   ├── App.tsx                 # 路由与全局状态
-│   └── main.tsx                # React 入口
-├── data/                       # 数据存储
-│   ├── chat.db                 # SQLite 数据库
-│   └── faq/                    # FAQ 知识库源文件目录
+│   ├── rag/
+│   │   ├── faqLoader.ts         # 默认 FAQ、初始化与增删改同步
+│   │   └── vectorStore.ts       # Embedding 与内存余弦检索
+│   └── __tests__/               # DB、工作流和 RAG 单元测试
+├── src/
+│   ├── components/              # 聊天、侧栏、设置和表单组件
+│   ├── hooks/                   # 鉴权、聊天、会话、模型等 Hooks
+│   ├── pages/                   # 登录、聊天、后台和 FAQ 页面
+│   ├── utils/
+│   ├── App.tsx                  # 路由与页面组装
+│   ├── config.ts
+│   ├── main.tsx
+│   └── types.ts
+├── data/chat.db                 # SQLite 数据库及 WAL 文件
+├── README.md
+├── PROGRESS.md                  # 当前进度、技术债务与路线图
+├── RAG_LANDSCAPE.md             # RAG 方案调研
+├── TESTING_S1.md                # 阶段 1 功能测试说明
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts
-├── README.md                   # 项目说明
-├── PROGRESS.md                 # 开发进度与后续规划
-├── DEVELOPMENT.md              # 二次开发指南
-├── DEVELOPMENT_PLAN.md         # 开发方案与历史
-├── ACCEPTANCE.md               # 验收清单
-├── RAG_LANDSCAPE.md            # RAG 方案调研与升级路径
-├── TESTING_P0.md               # P0 阶段功能测试文档
-└── UI_CHECKLIST_P0.md          # P0 前端 UI 验收清单
+└── vitest.config.ts
 ```
 
-## 核心功能
+## 智能客服工作流
 
-### 智能客服 Agent（`cs-agent`）
+内置客服模型 ID 为 `cs-agent`，工作流定义在 `server/agents/graph.ts`：
 
-`cs-agent` 是内置模型 ID，走 [server/agents/graph.ts](file:///Users/botao/Desktop/Agent_demo/server/agents/graph.ts) 定义的 LangGraph 工作流：
-
-```
+```text
 START
-  → detect_intent   意图识别（refund / order_inquiry / tech_support / general）
-  → search_faq      知识库检索（LangChain Embedding + 余弦相似度）
-  → 条件路由：
-      ├─ 命中 FAQ → reply_faq → END
-      └─ 未命中    → call_agent（统一 LLM Provider 流式调用）
-                       → 条件路由：
-                           ├─ 能解决 → END
-                           └─ 无法解决 → create_ticket（升级工单）→ END
+  → detect_intent   规则识别 refund / order_inquiry / tech_support / general
+  → search_faq      Embedding + 余弦相似度检索 FAQ
+  → 条件路由
+      ├─ 高置信度命中 → reply_faq → END
+      └─ 未命中       → call_agent
+                           ├─ 能解决   → END
+                           └─ 需人工   → create_ticket → END
 ```
 
-SSE 流事件：
-- `intent` - 意图 + 置信度
-- `workflow_meta` - 是否命中 FAQ、是否升级、Ticket ID
-- `text` - 最终回复文本
-- `done` - 结束
+`/api/cs-agent/chat` 的主要 SSE 事件：
 
-### 内容安全过滤
+- `init`：会话 ID、用户消息 ID、助手消息 ID
+- `intent`：意图和置信度
+- `text`：流式文本
+- `workflow_meta`：FAQ 命中、升级状态和工单 ID
+- `done`：响应结束
+- `error`：处理异常
 
-[server/moderation/contentFilter.ts](file:///Users/botao/Desktop/Agent_demo/server/moderation/contentFilter.ts) 在 `/api/chat` 和 `/api/cs-agent/chat` 入口处对输入做同步过滤，对 SSE 流式输出做滑动窗口扫描：
+## FAQ 与 RAG
 
-| 类型       | 行为       | 例子                            |
-| ---------- | ---------- | ------------------------------- |
-| 敏感词命中 | 阻断请求   | politics / violence / porn 等 |
-| 隐私信息   | 脱敏改写   | 手机号 / 身份证 / 银行卡 / 邮箱   |
-| 注入风险   | 仅警告     | 提示词注入关键词命中                |
+FAQ 数据保存在 SQLite 的 `faq_knowledge` 表。服务启动时：
 
-输入端命中敏感词直接返回 400；输出端命中通过 `StreamModerator` 实时拦截并写入 `blocked` 事件。
+1. 如果 FAQ 表为空，写入内置种子数据；
+2. 调用 Embedding API 为问题和关键词生成向量；
+3. 将向量保存在进程内存中；
+4. 查询时按意图分类过滤并使用余弦相似度排序。
 
-### FAQ 知识库管理
+管理员页面路径是 `/admin/faq`。FAQ 新增、修改和删除会同步更新内存向量索引。服务重启后会从数据库全量重建索引。
 
-管理员后台 `/admin/faqs` 页面（[src/pages/FaqManagePage.tsx](file:///Users/botao/Desktop/Agent_demo/src/pages/FaqManagePage.tsx)）提供完整的可视化 CRUD：
+当前限制：
 
-- 列表 + 分类筛选（退款 / 订单查询 / 技术支持 / 通用）+ 关键词全文搜索
-- 新增 / 编辑 / 删除（删除前弹确认框，避免误操作）
-- 编辑表单（[FaqEditForm.tsx](file:///Users/botao/Desktop/Agent_demo/src/components/FaqEditForm.tsx)）脱离 TDesign Form/FormItem，使用 CSS Grid + 原生 input，避免受控组件 value 劫持
-- 任何变更通过后端 `replaceFaq` / `addFaq` / `removeFaq` 自动同步向量库（remove → addEntry 重建 embedding）
+- 向量只保存在内存，不会持久化；
+- Embedding API 不可用时检索返回空结果；
+- 每条 FAQ 作为一个检索单元，没有长文档分块、混合检索或 Reranker；
+- `/api/faq/autocomplete` 已实现，前端输入框尚未接入自动补全 UI。
 
-### 统一 LLM Provider
+## 内容安全
 
-[server/agents/llm-provider.ts](file:///Users/botao/Desktop/Agent_demo/server/agents/llm-provider.ts) 通过环境变量自动选择后端：
+`server/moderation/contentFilter.ts` 对 `/api/chat` 和 `/api/cs-agent/chat` 执行双向过滤：
 
-| 优先级 | 触发条件 | 实现 |
-|--------|----------|------|
-| 1 | `MINIMAX_API_KEY` | OpenAI 兼容 Provider，base_url 默认 `https://api.minimax.chat/v1` |
-| 2 | `OPENAI_API_KEY` | OpenAI 兼容 Provider，base_url 默认 `https://api.openai.com/v1` |
-| 3 | 无 Key | 兜底 Provider（演示模式，模板化回复） |
+| 类型 | 当前行为 |
+| --- | --- |
+| 敏感词 | 输入命中时阻断请求；输出命中时停止或替换流内容 |
+| 隐私信息 | 对手机号、身份证、银行卡和邮箱等内容脱敏 |
+| 提示词注入 | 标记风险并记录警告，不直接阻断 |
 
-所有 Provider 都支持流式输出（`onText` 回调），与 SSE 协议无缝集成。
+输出端使用滑动窗口扫描，避免敏感内容跨多个 SSE 分片绕过检查。
 
-### 流式响应
+## 数据模型
 
-使用 Server-Sent Events (SSE) 实现实时流式响应：
-- 文本内容流式输出（`text` 事件）
-- CS Agent 元数据流式推送（`intent` / `workflow_meta` 事件）
-- 统一以 `done` 事件结束，`error` 事件报告异常
+SQLite 包含 7 张业务表：
 
-### 数据持久化
+| 表 | 用途 |
+| --- | --- |
+| `sessions` | 会话标题、模型与时间戳 |
+| `messages` | 用户/助手消息、撤回状态与工作流元数据 |
+| `faq_knowledge` | FAQ 问题、答案、分类和关键词 |
+| `tickets` | 人工工单、状态、优先级和处理结果 |
+| `conversation_intents` | 意图、置信度和 FAQ 命中记录 |
+| `satisfaction_ratings` | 1～5 星评分和评语 |
+| `users` | 用户、密码哈希和角色 |
 
-使用 SQLite 存储（7 张表）：
-- `sessions` - 会话信息（标题、模型、Agent 绑定）
-- `messages` - 消息历史（角色、内容、模型、时间戳）
-- `faq_knowledge` - FAQ 知识库（问题、答案、分类、关键词）
-- `tickets` - 工单记录（状态、优先级、升级流转）
-- `conversation_intents` - 意图识别记录（意图、置信度、FAQ 命中）
-- `satisfaction_ratings` - 满意度评分（1-5 星 + 评语）
-- `users` - 用户认证（bcrypt 密码哈希 + RBAC 角色）
+## API 概览
 
-## API 端点
+### 公共与鉴权
 
-| 端点 | 方法 | 描述 |
-|------|------|------|
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
 | `/api/health` | GET | 健康检查 |
-| `/api/auth/login` | POST | 用户登录，返回 JWT |
-| `/api/auth/me` | GET | 当前用户信息 |
-| `/api/models` | GET | 获取可用模型列表 |
-| `/api/sessions` | GET | 获取所有会话 |
-| `/api/sessions` | POST | 创建新会话 |
-| `/api/sessions/:id` | GET | 获取单个会话（含消息） |
-| `/api/sessions/:id` | PATCH | 更新会话（标题/模型） |
-| `/api/sessions/:id` | DELETE | 删除会话 |
-| `/api/chat` | POST | 通用对话（SSE 流式响应） |
-| `/api/cs-agent/chat` | POST | 智能客服 Agent（SSE 流式响应） |
-| `/api/satisfaction` | POST | 提交满意度评分 |
-| `/api/admin/dashboard` | GET | 管理员仪表盘统计 |
-| `/api/admin/conversations` | GET | 全部会话（管理员） |
-| `/api/admin/conversations/:sessionId` | GET | 单个会话详情（管理员） |
+| `/api/auth/login` | POST | 登录并获取 JWT |
+| `/api/auth/register` | POST | 管理员创建用户 |
+| `/api/auth/me` | GET | 获取当前用户 |
+| `/api/models` | GET | 获取当前 Provider 可用模型 |
+
+### 会话、消息与聊天
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/sessions` | GET / POST | 获取或创建会话 |
+| `/api/sessions/:sessionId` | GET / PATCH / DELETE | 会话详情、更新或删除 |
+| `/api/messages/:msgId/recall` | PATCH | 成对撤回用户消息和后续助手回复 |
+| `/api/sessions/:sessionId/export` | GET | 导出 JSON 或 Markdown |
+| `/api/chat` | POST | 通用聊天 SSE，要求登录 |
+| `/api/cs-agent/chat` | POST | 客服工作流 SSE，要求登录 |
+
+### FAQ 与满意度
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/faq/suggestions` | GET | 按分类返回快捷问题 |
+| `/api/faq/autocomplete?q=...` | GET | FAQ 问题联想 |
+| `/api/satisfaction` | POST | 提交满意度 |
+| `/api/satisfaction/stats` | GET | 满意度统计 |
+
+### 管理后台
+
+以下端点统一要求 `admin` 角色：
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/admin/dashboard` | GET | 仪表盘统计 |
+| `/api/admin/conversations` | GET | 会话列表 |
+| `/api/admin/conversations/:sessionId` | GET | 会话详情 |
 | `/api/admin/stats/satisfaction` | GET | 满意度统计 |
-| `/api/admin/stats/intents` | GET | 意图分布统计 |
+| `/api/admin/stats/intents` | GET | 意图分布 |
 | `/api/admin/stats/tickets` | GET | 工单统计 |
 | `/api/admin/tickets` | GET | 工单列表 |
-| `/api/admin/tickets/:ticketId` | PATCH | 更新工单状态/分配 |
-| `/api/admin/faq` | GET | FAQ 列表（管理员） |
-| `/api/admin/faq` | POST | 新增 FAQ（同步向量库） |
-| `/api/admin/faq/:id` | PATCH | 更新 FAQ（同步向量库） |
-| `/api/admin/faq/:id` | DELETE | 删除 FAQ（同步向量库） |
+| `/api/admin/tickets/:ticketId` | PATCH | 更新工单 |
+| `/api/admin/faq` | GET / POST | FAQ 列表或新增 |
+| `/api/admin/faq/:id` | PATCH / DELETE | 修改或删除 FAQ |
 
-## 环境要求
+## 当前安全边界
 
-- Node.js 20+（`better-sqlite3` 需要原生模块匹配 ABI 版本）
-- npm 或 yarn
+管理员 API 和两个聊天 API 已启用鉴权，但会话 CRUD、消息撤回、FAQ 推荐、导出和满意度端点目前没有统一挂载 `requireAuth`，数据库也没有把会话关联到用户。因此当前版本适合本地演示和功能验证，不应在未补充数据隔离与授权校验前直接部署为多用户生产服务。
 
-## 配置
+另请注意：自定义 Agent 配置保存在浏览器 `localStorage`，不会同步到服务器或其他设备。
 
-### 方式一：`.env` 文件
-
-参考 `.env.example`：
+## 测试
 
 ```bash
-PORT=3000
-
-# LLM Provider（至少配置一种，优先级见上文）
-MINIMAX_API_KEY=your_minimax_api_key
-# OPENAI_API_KEY=your_api_key
-# OPENAI_BASE_URL=https://api.openai.com/v1
-
-# 管理员账号（首次启动自动创建）
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=admin123
-
-# JWT
-JWT_SECRET=your_jwt_secret
+npm test
 ```
 
-### 方式二：Web UI 配置
+截至 2026-10-25，`npm test` 的基线为 4 个测试文件、42 个测试通过。覆盖数据库 CRUD 与约束、消息成对撤回、意图分类、FAQ 数据校验和向量相似度。
 
-在应用的设置页面中配置环境变量（仅在当前服务器进程有效，重启失效）。
-
-## 开发
+内容安全模块另有一个手动自检脚本，当前未纳入 Vitest 配置：
 
 ```bash
-# 开发模式（同时启动前后端）
-npm run dev
-
-# 单独启动后端
-npm run dev:server
-
-# 单独启动前端
-npm run dev:client
-
-# 构建生产版本
-npm run build
-
-# 运行生产版本
-npm start
+npx tsx server/moderation/contentFilter.test.ts
 ```
 
 ## 路线图
 
-- [x] FAQ 可视化管理界面（P0-1）
-- [x] 内容安全过滤（敏感词 / 隐私 / 注入）（P0-3）
-- [x] 多轮上下文（P0-2）
-- [ ] 历史会话导出（JSON / Markdown）
-- [ ] WebSocket 长连接替代部分 SSE
+- [x] FAQ 可视化管理
+- [x] 内容安全过滤
+- [x] 多轮上下文
+- [x] 消息成对撤回
+- [x] 快捷问题推荐
+- [x] 会话导出（JSON / Markdown）
+- [ ] FAQ 输入联想 UI（后端 API 已完成）
+- [ ] 会话归属、接口授权与多用户数据隔离
+- [ ] LangGraph 流式回调并发隔离
+- [ ] Embedding 缓存持久化和离线降级检索
+- [ ] WebSocket 实时能力
 - [ ] CS Agent 多租户配置

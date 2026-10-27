@@ -1,8 +1,9 @@
 import { Loading, Tag } from 'tdesign-react';
 import { ChatMarkdown } from '@tdesign-react/chat';
-import { User, Bot, AlertCircle, CheckCircle2, FileSearch } from 'lucide-react';
+import { User, Bot, AlertCircle, CheckCircle2, FileSearch, RotateCcw } from 'lucide-react';
 import { Message, Model, ContentBlock } from '../types';
 import { ToolCallsCollapse } from './ToolCallsCollapse';
+import { useState } from 'react';
 
 /** 意图标签映射 */
 const INTENT_LABELS: Record<string, { label: string; theme: 'primary' | 'success' | 'warning' | 'danger' }> = {
@@ -16,13 +17,16 @@ interface ChatMessagesProps {
   messages: Message[];
   models: Model[];
   messagesEndRef: React.RefObject<HTMLDivElement>;
+  onRecallMessage?: (messageId: string) => void;
 }
 
 export function ChatMessages({
   messages,
   models,
   messagesEndRef,
+  onRecallMessage,
 }: ChatMessagesProps) {
+  const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
   const formatModelName = (modelId: string) => {
     const model = models.find(m => m.modelId === modelId);
     const name = model?.name || modelId;
@@ -116,13 +120,29 @@ export function ChatMessages({
 
   // 渲染 assistant 消息内容
   const renderAssistantContent = (message: Message) => {
+    // 如果是 recalled 状态，显示撤回占位
+    if (message.status === 'recalled') {
+      return (
+        <div
+          className="px-4 py-3 leading-relaxed break-words italic"
+          style={{
+            backgroundColor: 'var(--td-bg-color-component)',
+            color: 'var(--td-text-color-placeholder)',
+            borderRadius: '16px 16px 16px 4px'
+          }}
+        >
+          [消息已撤回]
+        </div>
+      );
+    }
+
     // 优先使用 contentBlocks（按顺序排列）
     if (message.contentBlocks && message.contentBlocks.length > 0) {
-      return message.contentBlocks.map((block, index) => 
+      return message.contentBlocks.map((block, index) =>
         renderContentBlock(block, index, message.isStreaming, index === message.contentBlocks!.length - 1)
       );
     }
-    
+
     // 兼容旧数据：先显示所有工具调用，再显示文本
     return (
       <>
@@ -204,15 +224,50 @@ export function ChatMessages({
             
             {/* 用户消息 */}
             {message.role === 'user' && (
-              <div 
-                className="px-4 py-3 leading-relaxed break-words"
-                style={{
-                  backgroundColor: 'var(--td-brand-color)',
-                  color: 'white',
-                  borderRadius: '16px 16px 4px 16px'
-                }}
+              <div
+                className="relative"
+                onMouseEnter={() => setHoveredMsgId(message.id)}
+                onMouseLeave={() => setHoveredMsgId(null)}
               >
-                {message.content}
+                {message.status === 'recalled' ? (
+                  <div
+                    className="px-4 py-3 leading-relaxed break-words italic"
+                    style={{
+                      backgroundColor: 'var(--td-bg-color-component)',
+                      color: 'var(--td-text-color-placeholder)',
+                      borderRadius: '16px 16px 4px 16px'
+                    }}
+                  >
+                    [消息已撤回]
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      className="px-4 py-3 leading-relaxed break-words"
+                      style={{
+                        backgroundColor: 'var(--td-brand-color)',
+                        color: 'white',
+                        borderRadius: '16px 16px 4px 16px'
+                      }}
+                    >
+                      {message.content}
+                    </div>
+                    {hoveredMsgId === message.id && onRecallMessage && (
+                      <button
+                        className="absolute -top-2 -left-2 w-6 h-6 flex items-center justify-center rounded-full shadow text-xs"
+                        style={{
+                          backgroundColor: 'var(--td-bg-color-container)',
+                          color: 'var(--td-text-color-secondary)',
+                          border: '1px solid var(--td-component-stroke)',
+                        }}
+                        onClick={() => onRecallMessage(message.id)}
+                        title="撤回消息"
+                      >
+                        <RotateCcw size={12} />
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             )}
             

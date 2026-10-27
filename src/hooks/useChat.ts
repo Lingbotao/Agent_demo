@@ -132,6 +132,8 @@ export function useChat(options: UseChatOptions) {
           message: messageContent,
           model: selectedModel,
           systemPrompt: isCSAgent ? undefined : systemPrompt,
+          // 把前端临时 user 消息 ID 传给服务端，避免后续撤回时 ID 不匹配
+          clientMessageId: tempUserMessageId,
         })
       });
 
@@ -191,15 +193,25 @@ export function useChat(options: UseChatOptions) {
                     sessionId = realSessionId;
                   }
 
+                  // 如果服务端返回的 userMessageId 不同于前端临时 ID（旧服务端兼容），同步之
+                  const serverUserId = data.userMessageId as string | undefined;
+                  const targetUserId = (serverUserId && serverUserId !== tempUserMessageId)
+                    ? serverUserId
+                    : tempUserMessageId;
+
                   setSessions(prev => prev.map(s => {
                     if (s.id === realSessionId) {
                       return {
                         ...s,
-                        messages: s.messages.map(m =>
-                          m.id === tempAssistantMessageId
-                            ? { ...m, id: realAssistantMessageId }
-                            : m
-                        )
+                        messages: s.messages.map(m => {
+                          if (m.id === tempAssistantMessageId) {
+                            return { ...m, id: realAssistantMessageId };
+                          }
+                          if (serverUserId && m.id === tempUserMessageId) {
+                            return { ...m, id: targetUserId };
+                          }
+                          return m;
+                        })
                       };
                     }
                     return s;
@@ -305,11 +317,66 @@ export function useChat(options: UseChatOptions) {
     setIsLoading(false);
   }, []);
 
+  // 撤回消息
+  const recallMessage = useCallback(async (messageId: string) => {
+    if (!messageId || typeof messageId !== 'string' || messageId.length < 8) {
+      console.error('[Recall] messageId 格式异常:', messageId);
+      return;
+    }
+    try {
+      const response = await fetch(`/api/messages/${encodeURIComponent(messageId)}/recall`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+      });
+
+      if (response.ok) {
+        const data = await response.json().catch(() => ({}));
+        // 成对撤回：用户消息 + 紧随其后的 assistant 消息
+        const assistantId = data.assistantMessageId as string | undefined;
+        setSessions(prev => prev.map(s => ({
+          ...s,
+          messages: s.messages.map(m => {
+            if (m.id === messageId) {
+              return { ...m, content: '[消息已撤回]', status: 'recalled' };
+            }
+            if (assistantId && m.id === assistantId) {
+              return { ...m, content: '[消息已撤回]', status: 'recalled' };
+            }
+            return m;
+          })
+        })));
+        if (data.alreadyRecalled) {
+          console.log('[Recall] 消息已是 recalled 状态，跳过更新');
+        }
+        if (assistantId) {
+          console.log(`[Recall] 已配对撤回 user=${messageId} + assistant=${assistantId}`);
+        }
+      } else {
+        let errBody: any = null;
+        try { errBody = await response.json(); } catch {}
+        const errMsg = errBody?.error || `HTTP ${response.status}`;
+        console.error(`[Recall] 失败 (${response.status}): ${errMsg}`, errBody);
+        // 即便服务端失败，也在前端做视觉撤回（乐观更新），但保留 status 用于排查
+        setSessions(prev => prev.map(s => ({
+          ...s,
+          messages: s.messages.map(m =>
+            m.id === messageId
+              ? { ...m, content: '[消息已撤回]', status: 'client-recalled-failed' }
+              : m
+          )
+        })));
+      }
+    } catch (error) {
+      console.error('[Recall] 网络错误:', error);
+    }
+  }, [setSessions, authHeader]);
+
   return {
     isLoading,
     inputValue,
     setInputValue: saveInput,
     sendMessage,
     handleStop,
+    recallMessage,
   };
 }

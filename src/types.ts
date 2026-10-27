@@ -38,6 +38,8 @@ export interface Message {
   intentConfidence?: number;
   /** 智能客服扩展: 工作流元数据 */
   workflowMeta?: CSAgentWorkflowMeta;
+  /** 消息状态: active | recalled */
+  status?: string;
 }
 
 /** 智能客服工作流元数据 */

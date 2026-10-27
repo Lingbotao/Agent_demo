@@ -194,7 +194,7 @@ app.get("/api/sessions/:sessionId", (req, res) => {
       }
     }
 
-    // 解析 tool_calls JSON，并附加 intent / workflowMeta
+    // 解析 tool_calls JSON，并附加 intent / workflowMeta / status
     const parsedMessages = messages.map(msg => ({
       ...msg,
       tool_calls: msg.tool_calls ? JSON.parse(msg.tool_calls) : null,
@@ -204,6 +204,7 @@ app.get("/api/sessions/:sessionId", (req, res) => {
       should_escalate: msg.role === 'assistant' ? !!msg.should_escalate : false,
       ticket_id: msg.role === 'assistant' ? msg.ticket_id ?? null : null,
       faq_score: msg.role === 'assistant' ? msg.faq_score ?? null : null,
+      status: msg.status ?? 'active',
     }));
 
     res.json({ session, messages: parsedMessages });
@@ -270,6 +271,147 @@ app.delete("/api/sessions/:sessionId", (req, res) => {
   }
 });
 
+// ============= 消息操作 API =============
+
+// 撤回消息（软删除 + 成对撤回 AI 回复）
+app.patch("/api/messages/:msgId/recall", (req, res) => {
+  try {
+    const { msgId } = req.params;
+    console.log(`[Recall] 收到撤回请求, msgId=${JSON.stringify(msgId)}`);
+
+    if (!msgId || typeof msgId !== 'string' || msgId.length < 8) {
+      console.warn(`[Recall] msgId 格式异常: ${JSON.stringify(msgId)}`);
+      return res.status(400).json({ error: "消息 ID 无效" });
+    }
+
+    const existing = db.getMessage(msgId);
+    if (!existing) {
+      console.warn(`[Recall] 消息不存在: ${msgId}`);
+      return res.status(404).json({ error: "消息不存在", messageId: msgId });
+    }
+    if (existing.role !== 'user') {
+      console.warn(`[Recall] 消息角色不允许撤回: role=${existing.role}`);
+      return res.status(400).json({ error: "只能撤回用户消息", messageId: msgId });
+    }
+    if (existing.status === 'recalled') {
+      return res.json({ success: true, messageId: msgId, alreadyRecalled: true });
+    }
+
+    // 成对撤回 user 消息 + 紧随其后的 assistant 消息
+    const result = db.recallMessagePair(msgId);
+    if (!result.userRecalled) {
+      console.warn(`[Recall] 撤回失败: ${msgId}`);
+      return res.status(500).json({ error: "撤回消息失败" });
+    }
+    res.json({
+      success: true,
+      messageId: msgId,
+      assistantMessageId: result.assistantId,
+      assistantRecalled: !!result.assistantRecalled,
+    });
+  } catch (error: any) {
+    console.error("[Recall Message] Error:", error);
+    res.status(500).json({ error: error?.message || "撤回消息失败" });
+  }
+});
+
+// ============= FAQ 推荐 API =============
+
+// 获取快捷问题推荐（按分类返回热门问题）
+app.get("/api/faq/suggestions", (req, res) => {
+  try {
+    const allFaq = db.getAllFaq();
+    // 按分类分组，每个分类取最多 3 条
+    const grouped: Record<string, Array<{ id: string; question: string; category: string }>> = {};
+    for (const faq of allFaq) {
+      if (!grouped[faq.category]) grouped[faq.category] = [];
+      if (grouped[faq.category].length < 3) {
+        grouped[faq.category].push({ id: faq.id, question: faq.question, category: faq.category });
+      }
+    }
+    res.json({ suggestions: grouped });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message });
+  }
+});
+
+// 输入联想：根据前缀匹配 FAQ 问题
+app.get("/api/faq/autocomplete", (req, res) => {
+  try {
+    const q = (req.query.q as string || '').trim();
+    if (!q) {
+      return res.json({ matches: [] });
+    }
+    const allFaq = db.getAllFaq();
+    const matches = allFaq
+      .filter(f => f.question.includes(q))
+      .slice(0, 5)
+      .map(f => ({ id: f.id, question: f.question, category: f.category }));
+    res.json({ matches });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message });
+  }
+});
+
+// ============= 导出对话 API =============
+
+// 导出会话为 JSON 或 Markdown
+app.get("/api/sessions/:sessionId/export", (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const format = (req.query.format as string) || 'json';
+    const session = db.getSession(sessionId);
+    if (!session) {
+      return res.status(404).json({ error: "会话不存在" });
+    }
+    const messages = db.getMessagesBySession(sessionId);
+
+    if (format === 'markdown') {
+      let md = `# ${session.title}\n\n`;
+      md += `- 模型: ${session.model}\n`;
+      md += `- 创建时间: ${session.created_at}\n`;
+      md += `- 更新时间: ${session.updated_at}\n\n---\n\n`;
+      for (const msg of messages) {
+        const role = msg.role === 'user' ? '**用户**' : '**AI 助手**';
+        const content = msg.status === 'recalled' ? '[消息已撤回]' : msg.content;
+        md += `### ${role}\n\n${content}\n\n`;
+        if (msg.model) {
+          md += `*模型: ${msg.model}*  \n`;
+        }
+        md += `*${msg.created_at}*\n\n---\n\n`;
+      }
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="session-${sessionId}.md"`);
+      res.send(md);
+    } else {
+      // JSON 格式
+      const exportData = {
+        session: {
+          id: session.id,
+          title: session.title,
+          model: session.model,
+          created_at: session.created_at,
+          updated_at: session.updated_at,
+        },
+        messages: messages.map(m => ({
+          id: m.id,
+          role: m.role,
+          content: m.status === 'recalled' ? '[消息已撤回]' : m.content,
+          model: m.model,
+          created_at: m.created_at,
+          status: m.status ?? 'active',
+        })),
+        exported_at: new Date().toISOString(),
+      };
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="session-${sessionId}.json"`);
+      res.json(exportData);
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message });
+  }
+});
+
 // ============= 聊天 API =============
 
 // 发送消息并获取流式响应
@@ -308,7 +450,10 @@ app.post("/api/chat", requireAuth, async (req, res) => {
   const selectedModel = model || session.model;
 
   // 创建用户消息 ID 和助手消息 ID
-  const userMessageId = uuidv4();
+  // 优先使用前端传来的 ID（前端已有临时 ID，避免双 ID 同步问题）
+  const userMessageId = (req.body.clientMessageId && typeof req.body.clientMessageId === 'string' && req.body.clientMessageId.length >= 8)
+    ? req.body.clientMessageId
+    : uuidv4();
   const assistantMessageId = uuidv4();
 
   // 保存用户消息到数据库
@@ -515,7 +660,10 @@ app.post("/api/cs-agent/chat", requireAuth, async (req, res) => {
     });
   }
 
-  const userMessageId = uuidv4();
+  // 优先使用前端传来的 ID（前端已有临时 ID，避免双 ID 同步问题）
+  const userMessageId = (req.body.clientMessageId && typeof req.body.clientMessageId === 'string' && req.body.clientMessageId.length >= 8)
+    ? req.body.clientMessageId
+    : uuidv4();
   const assistantMessageId = uuidv4();
 
   // 保存用户消息（脱敏版本）
